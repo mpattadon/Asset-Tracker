@@ -1,0 +1,91 @@
+export const summaryCards = [
+  { label: 'Net Worth', value: 'THB 14.8M', delta: '+4.3% MoM' },
+  { label: 'Invested', value: 'THB 10.6M', delta: '+3.2% YTD' },
+  { label: 'Cash & Savings', value: 'THB 2.1M', delta: 'Stable' },
+  { label: 'Alternatives', value: 'THB 2.1M', delta: '+2.0% MoM' },
+]
+
+export const allocation = [
+  { area: 'Equities', percent: 54, color: '#3B82F6' },
+  { area: 'Fixed Income', percent: 18, color: '#F59E0B' },
+  { area: 'Gold', percent: 12, color: '#EAB308' },
+  { area: 'Cash', percent: 10, color: '#22D3EE' },
+  { area: 'Lottery', percent: 6, color: '#10B981' },
+]
+
+export const stockBreakdown = {
+  thai: [
+    { label: 'SET Tech', value: 32, color: '#3B82F6' },
+    { label: 'Energy', value: 26, color: '#F59E0B' },
+    { label: 'Healthcare', value: 18, color: '#10B981' },
+    { label: 'Banks', value: 24, color: '#06B6D4' },
+  ],
+  us: [
+    { label: 'Big Tech', value: 45, color: '#6366F1' },
+    { label: 'Industrials', value: 20, color: '#F97316' },
+    { label: 'Healthcare', value: 15, color: '#06B6D4' },
+    { label: 'ETFs', value: 20, color: '#84CC16' },
+  ],
+}
+
+export const stockPerformance = {
+  thai: { change: '+6.4% YTD', series: [92, 95, 93, 102, 108, 111, 118] },
+  us: { change: '+12.8% YTD', series: [110, 112, 116, 121, 124, 130, 138] },
+}
+
+export const bondHoldings = [
+  { name: 'Thai Govt 2030', yield: '3.4%', amount: 'THB 1,200,000', duration: '6.2 yrs' },
+  { name: 'Debenture - Telco', yield: '4.8%', amount: 'THB 600,000', duration: '3.0 yrs' },
+  { name: 'Infrastructure Bond', yield: '5.2%', amount: 'THB 450,000', duration: '8.0 yrs' },
+]
+
+export const goldPositions = [
+  { type: 'Physical Bars', weight: '310g', value: 'THB 750,000', change: '+2.1% MoM' },
+  { type: 'Gold ETF', weight: '9 oz', value: 'THB 520,000', change: '+1.4% MoM' },
+]
+
+export const mutualFunds = [
+  { name: 'Global Growth Fund', exposure: '70% equity / 30% bonds', nav: 'THB 820,000', change: '+8.2% YTD' },
+  { name: 'Asia Dividend', exposure: 'Regional equities', nav: 'THB 610,000', change: '+4.6% YTD' },
+  { name: 'Sustainable Balanced', exposure: '60/40 multi-asset', nav: 'THB 430,000', change: '+3.1% YTD' },
+]
+
+export const bankData = {
+  thai: {
+    total: 'THB 2.1M',
+    accounts: [
+      { bank: 'Bangkok Bank', balance: 'THB 820,000', change: '+18k this month' },
+      { bank: 'Kasikorn', balance: 'THB 540,000', change: '+6k this month' },
+      { bank: 'SCB Savings', balance: 'THB 390,000', change: '+4k this month' },
+    ],
+    series: [60, 63, 62, 66, 70, 72, 75],
+  },
+  uk: {
+    total: '£41,600',
+    accounts: [
+      { bank: 'Monzo', balance: '£18,400', change: '+£320 this month' },
+      { bank: 'HSBC UK', balance: '£12,800', change: '+£180 this month' },
+      { bank: 'Nationwide', balance: '£10,400', change: '+£90 this month' },
+    ],
+    series: [38, 39, 40, 41, 40, 41.2, 41.6],
+  },
+}
+
+export const lotteryEntries = [
+  { draw: 'Dec 1', tickets: 8, committed: 'THB 16,000', estPayout: 'THB 120,000 high tier' },
+  { draw: 'Dec 16', tickets: 6, committed: 'THB 12,000', estPayout: 'THB 45,000 mid tier' },
+]
+
+export const expenseSummary = {
+  monthly: [
+    { name: 'Housing & Utilities', amount: 'THB 38,000', renewal: 'Monthly autopay' },
+    { name: 'Insurance', amount: 'THB 12,500', renewal: 'Monthly debit' },
+    { name: 'Subscriptions', amount: 'THB 3,200', renewal: 'Renew 5th' },
+  ],
+  yearly: [
+    { name: 'Property Tax', amount: 'THB 18,000', renewal: 'Mar 2025' },
+    { name: 'Car Insurance', amount: 'THB 24,000', renewal: 'Aug 2025' },
+    { name: 'Domain & Cloud', amount: 'THB 6,400', renewal: 'Jan 2026' },
+  ],
+  runway: '11.2 months',
+}
