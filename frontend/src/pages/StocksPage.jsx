@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Section from '../components/Section'
-import { PieDonut, Sparkline, TradingViewChart } from '../components/Charts'
+import { PieDonut, Sparkline, AreaChart, CandleChart } from '../components/Charts'
 
 function StockOverview({ breakdown, performance }) {
   const [tab, setTab] = useState('thai')
@@ -104,18 +104,6 @@ function StockMarketDetail({ market, sortByDay, onSortToggle, onAddInvestment })
   const [range, setRange] = useState('1M')
   const filteredSeries = filterRange(series, range)
   const filteredCandles = filterCandles(candlesticks, range)
-  const baseTime = Math.floor(Date.now() / 1000)
-  const linePoints = filteredSeries.map((value, idx) => ({
-    time: baseTime - (filteredSeries.length - idx) * 86400,
-    value,
-  }))
-  const candlePoints = filteredCandles.map((c, idx) => ({
-    time: baseTime - (filteredCandles.length - idx) * 86400,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-  }))
 
   return (
     <div className="card stock-panel">
@@ -163,7 +151,7 @@ function StockMarketDetail({ market, sortByDay, onSortToggle, onAddInvestment })
         <div className="chart-frame">
           <div className="axis-label y-label">Value</div>
           <div className="axis-label x-label">Time</div>
-          <TradingViewChart mode={chartMode === 'candle' ? 'candle' : 'line'} linePoints={linePoints} candles={candlePoints} />
+          {chartMode === 'candle' ? <CandleChart candles={filteredCandles} /> : <AreaChart points={filteredSeries} color="#3B82F6" />}
         </div>
       </div>
 

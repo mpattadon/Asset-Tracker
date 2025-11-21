@@ -1,5 +1,4 @@
-import { useMemo, useEffect, useRef } from 'react'
-import { createChart, CrosshairMode } from 'lightweight-charts'
+import { useMemo } from 'react'
 
 export function PieDonut({ segments, label }) {
   const total = useMemo(() => segments.reduce((sum, s) => sum + s.value, 0), [segments])
@@ -86,53 +85,41 @@ export function AreaChart({ points, color = '#3B82F6' }) {
 }
 
 export function CandleChart({ candles, colorUp = '#16A34A', colorDown = '#DC2626' }) {
-  // Deprecated in favor of TradingViewChart; kept for compatibility if needed elsewhere.
-  return null
-}
+  if (!candles || !candles.length) return null
+  const highs = candles.map((c) => c.high)
+  const lows = candles.map((c) => c.low)
+  const max = Math.max(...highs)
+  const min = Math.min(...lows)
+  const range = max - min || 1
+  const width = 100
+  const height = 100
+  const padding = 6
+  const candleWidth = (width - padding * 2) / candles.length - 2
 
-export function TradingViewChart({ mode = 'line', linePoints = [], candles = [] }) {
-  const ref = useRef(null)
-  const depKey = JSON.stringify({ mode, linePoints, candles })
+  const y = (value) => height - ((value - min) / range) * (height - padding * 2) - padding
 
-  useEffect(() => {
-    if (!ref.current) return
-    const chart = createChart(ref.current, {
-      width: ref.current.clientWidth,
-      height: 260,
-      layout: { background: { color: 'transparent' }, textColor: '#0f172a' },
-      grid: { vertLines: { color: 'rgba(15,23,42,0.06)' }, horzLines: { color: 'rgba(15,23,42,0.06)' } },
-      rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false },
-      crosshair: { mode: CrosshairMode.Normal },
-    })
-
-    let series
-    if (mode === 'candle' && candles.length) {
-      series = chart.addCandlestickSeries({
-        upColor: '#16A34A',
-        downColor: '#DC2626',
-        wickUpColor: '#16A34A',
-        wickDownColor: '#DC2626',
-        borderVisible: false,
-      })
-      series.setData(candles)
-    } else {
-      series = chart.addAreaSeries({
-        lineColor: '#2563eb',
-        topColor: 'rgba(37, 99, 235, 0.35)',
-        bottomColor: 'rgba(37, 99, 235, 0.05)',
-        lineWidth: 2,
-      })
-      series.setData(linePoints)
-    }
-
-    const handleResize = () => chart.applyOptions({ width: ref.current.clientWidth })
-    window.addEventListener('resize', handleResize)
-    return () => {
-      window.removeEventListener('resize', handleResize)
-      chart.remove()
-    }
-  }, [depKey])
-
-  return <div className="tv-chart" ref={ref} />
+  return (
+    <svg className="candle-chart" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+      {candles.map((c, i) => {
+        const x = padding + i * (candleWidth + 2)
+        const isUp = c.close >= c.open
+        const wickColor = isUp ? colorUp : colorDown
+        const bodyTop = y(Math.max(c.open, c.close))
+        const bodyBottom = y(Math.min(c.open, c.close))
+        return (
+          <g key={i}>
+            <line x1={x + candleWidth / 2} x2={x + candleWidth / 2} y1={y(c.high)} y2={y(c.low)} stroke={wickColor} strokeWidth="1.5" />
+            <rect
+              x={x}
+              width={candleWidth}
+              y={bodyTop}
+              height={Math.max(2, bodyBottom - bodyTop)}
+              fill={isUp ? colorUp : colorDown}
+              rx="1"
+            />
+          </g>
+        )
+      })}
+    </svg>
+  )
 }

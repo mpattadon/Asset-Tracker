@@ -33,6 +33,63 @@ export const stockPerformance = {
   us: { change: '+12.8% YTD', series: [110, 112, 116, 121, 124, 130, 138] },
 }
 
+export const stockMarkets = {
+  thai: {
+    title: 'Thai Stock',
+    currency: 'THB',
+    value: 608670,
+    dayChange: -3910.01,
+    dayChangePct: -0.64,
+    totalChange: -489510,
+    totalChangePct: -44.57,
+    series: [640000, 645000, 638500, 652000, 648000, 642500, 636000, 625000, 620500, 618000, 614000, 608670],
+    series: [640000, 645000, 638500, 652000, 648000, 642500, 636000, 625000, 620500, 618000, 614000, 608670],
+    candlesticks: [
+      { time: 'Oct 27', open: 640000, high: 646000, low: 635000, close: 645000 },
+      { time: 'Oct 30', open: 645000, high: 652000, low: 641000, close: 648000 },
+      { time: 'Nov 01', open: 648000, high: 654000, low: 642500, close: 652000 },
+      { time: 'Nov 03', open: 652000, high: 654500, low: 646500, close: 648000 },
+      { time: 'Nov 06', open: 648000, high: 649500, low: 641000, close: 642500 },
+      { time: 'Nov 09', open: 642500, high: 644000, low: 633000, close: 636000 },
+      { time: 'Nov 12', open: 636000, high: 637000, low: 624500, close: 625000 },
+      { time: 'Nov 15', open: 625000, high: 627000, low: 618000, close: 620500 },
+      { time: 'Nov 17', open: 620500, high: 622000, low: 614000, close: 618000 },
+      { time: 'Nov 20', open: 618000, high: 619000, low: 607500, close: 608670 },
+    ],
+    holdings: [
+      { symbol: 'DOD', name: 'DOD Biotech PCL', price: 1.65, quantity: 26000, dayGain: -780, dayGainPct: -1.79, value: 42900 },
+      { symbol: 'OR', name: 'PTT Oil and Retail Business PCL', price: 13.2, quantity: 24000, dayGain: -2400.01, dayGainPct: -0.75, value: 316800 },
+    ],
+  },
+  us: {
+    title: 'US Stock',
+    currency: 'USD',
+    value: 124500,
+    dayChange: 820,
+    dayChangePct: 0.66,
+    totalChange: 18450,
+    totalChangePct: 17.4,
+    series: [112000, 114500, 113000, 116200, 118000, 119500, 120800, 121100, 122400, 123200, 124500],
+    candlesticks: [
+      { time: 'Oct 27', open: 112000, high: 115500, low: 111500, close: 114500 },
+      { time: 'Oct 30', open: 114500, high: 115000, low: 112000, close: 113000 },
+      { time: 'Nov 01', open: 113000, high: 117000, low: 113000, close: 116200 },
+      { time: 'Nov 03', open: 116200, high: 118500, low: 115500, close: 118000 },
+      { time: 'Nov 06', open: 118000, high: 120000, low: 117500, close: 119500 },
+      { time: 'Nov 09', open: 119500, high: 121000, low: 119000, close: 120800 },
+      { time: 'Nov 12', open: 120800, high: 121800, low: 120200, close: 121100 },
+      { time: 'Nov 15', open: 121100, high: 122900, low: 121000, close: 122400 },
+      { time: 'Nov 17', open: 122400, high: 123500, low: 122000, close: 123200 },
+      { time: 'Nov 20', open: 123200, high: 125000, low: 123000, close: 124500 },
+    ],
+    holdings: [
+      { symbol: 'AAPL', name: 'Apple Inc.', price: 189.75, quantity: 180, dayGain: 540, dayGainPct: 0.9, value: 34155 },
+      { symbol: 'MSFT', name: 'Microsoft Corp.', price: 412.3, quantity: 110, dayGain: 330, dayGainPct: 0.81, value: 45353 },
+      { symbol: 'VOO', name: 'Vanguard S&P 500 ETF', price: 475.1, quantity: 60, dayGain: -50, dayGainPct: -0.09, value: 28506 },
+    ],
+  },
+}
+
 export const bondHoldings = [
   { name: 'Thai Govt 2030', yield: '3.4%', amount: 'THB 1,200,000', duration: '6.2 yrs' },
   { name: 'Debenture - Telco', yield: '4.8%', amount: 'THB 600,000', duration: '3.0 yrs' },

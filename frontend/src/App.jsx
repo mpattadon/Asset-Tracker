@@ -10,6 +10,7 @@ import {
   mutualFunds,
   stockBreakdown,
   stockPerformance,
+  stockMarkets,
   summaryCards,
 } from './data/mockData'
 import HomePage from './pages/HomePage'
@@ -32,15 +33,16 @@ const PAGES = [
   { id: 'expenses', label: 'Expenses' },
 ]
 
-function App() {
+function App({ hideHeader = false }) {
   const [page, setPage] = useState('home')
+  const [navBlob, setNavBlob] = useState({ left: 0, width: 0, visible: false })
 
   const renderPage = () => {
     switch (page) {
       case 'home':
         return <HomePage cards={summaryCards} allocation={allocation} />
       case 'stocks':
-        return <StocksPage breakdown={stockBreakdown} performance={stockPerformance} />
+        return <StocksPage breakdown={stockBreakdown} performance={stockPerformance} markets={stockMarkets} />
       case 'bonds':
         return <BondsPage bonds={bondHoldings} />
       case 'gold':
@@ -60,7 +62,7 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="header">
+      <header className={`header ${hideHeader ? 'hidden' : ''}`}>
         <div>
           <p className="eyebrow">Asset Tracker</p>
           <h2 className="brand">Multi-market cockpit</h2>
@@ -68,9 +70,29 @@ function App() {
         </div>
       </header>
 
-      <nav className="nav-bar">
+      <nav
+        className="nav-bar"
+        onMouseLeave={() => setNavBlob((prev) => ({ ...prev, visible: false }))}
+      >
+        <div
+          className="nav-blob"
+          style={{
+            opacity: navBlob.visible ? 1 : 0,
+            transform: `translateX(${navBlob.left}px)`,
+            width: navBlob.width,
+          }}
+        />
         {PAGES.map((p) => (
-          <button key={p.id} className={page === p.id ? 'active' : ''} onClick={() => setPage(p.id)}>
+          <button
+            key={p.id}
+            className={page === p.id ? 'active' : ''}
+            onClick={() => setPage(p.id)}
+            onMouseEnter={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              const parent = e.currentTarget.parentElement.getBoundingClientRect()
+              setNavBlob({ left: rect.left - parent.left, width: rect.width, visible: true })
+            }}
+          >
             {p.label}
           </button>
         ))}
