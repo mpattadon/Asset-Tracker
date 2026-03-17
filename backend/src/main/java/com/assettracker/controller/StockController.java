@@ -1,11 +1,12 @@
 package com.assettracker.controller;
 
 import com.assettracker.model.AddHoldingRequest;
-import com.assettracker.model.Holding;
 import com.assettracker.model.QuoteResult;
+import com.assettracker.model.StockPositionView;
 import com.assettracker.model.StockSummary;
 import com.assettracker.service.QuoteProvider;
 import com.assettracker.service.StockPortfolioService;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,18 +31,18 @@ public class StockController {
     }
 
     @GetMapping("/markets/{market}/holdings")
-    public List<Holding> holdings(@RequestHeader(value = "X-User-Id", required = false) String userId,
-                                  @PathVariable String market,
-                                  @RequestParam(name = "sort", required = false) String sort) {
+    public List<StockPositionView> holdings(@RequestHeader(value = "X-User-Id", required = false) String userId,
+                                            @PathVariable String market,
+                                            @RequestParam(name = "sort", required = false) String sort) {
         boolean sortByDayChange = "dayChangePct".equalsIgnoreCase(sort);
         return stockPortfolioService.getHoldings(userId, market, sortByDayChange);
     }
 
     @PostMapping("/markets/{market}/holdings")
-    public Holding addHolding(@RequestHeader(value = "X-User-Id", required = false) String userId,
-                              @PathVariable String market,
-                              @RequestBody AddHoldingRequest request) {
-        return stockPortfolioService.addHolding(userId, request);
+    public StockPositionView addHolding(@RequestHeader(value = "X-User-Id", required = false) String userId,
+                                        @PathVariable String market,
+                                        @Valid @RequestBody AddHoldingRequest request) {
+        return stockPortfolioService.addHolding(userId, market, request);
     }
 
     @GetMapping("/markets/{market}/summary")

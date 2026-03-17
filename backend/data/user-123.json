@@ -1,0 +1,361 @@
+{
+  "stocks" : {
+    "thai" : {
+      "title" : "Thai Stock",
+      "currency" : "THB",
+      "value" : 608670.0,
+      "dayChange" : -3910.01,
+      "dayChangePct" : -0.64,
+      "totalChange" : -489510.0,
+      "totalChangePct" : -44.57,
+      "breakdown" : [ {
+        "label" : "SET Tech",
+        "value" : 32,
+        "color" : "#3B82F6"
+      }, {
+        "label" : "Energy",
+        "value" : 26,
+        "color" : "#F59E0B"
+      }, {
+        "label" : "Healthcare",
+        "value" : 18,
+        "color" : "#10B981"
+      }, {
+        "label" : "Banks",
+        "value" : 24,
+        "color" : "#06B6D4"
+      } ],
+      "performance" : {
+        "change" : "+6.4% YTD",
+        "series" : [ 92.0, 95.0, 93.0, 102.0, 108.0, 111.0, 118.0 ]
+      },
+      "series" : [ 640000.0, 645000.0, 638500.0, 652000.0, 648000.0, 642500.0, 636000.0, 625000.0, 620500.0, 618000.0, 614000.0, 608670.0 ],
+      "candlesticks" : [ {
+        "time" : "Oct 27",
+        "open" : 640000.0,
+        "high" : 646000.0,
+        "low" : 635000.0,
+        "close" : 645000.0
+      }, {
+        "time" : "Oct 30",
+        "open" : 645000.0,
+        "high" : 652000.0,
+        "low" : 641000.0,
+        "close" : 648000.0
+      }, {
+        "time" : "Nov 01",
+        "open" : 648000.0,
+        "high" : 654000.0,
+        "low" : 642500.0,
+        "close" : 652000.0
+      }, {
+        "time" : "Nov 03",
+        "open" : 652000.0,
+        "high" : 654500.0,
+        "low" : 646500.0,
+        "close" : 648000.0
+      }, {
+        "time" : "Nov 06",
+        "open" : 648000.0,
+        "high" : 649500.0,
+        "low" : 641000.0,
+        "close" : 642500.0
+      }, {
+        "time" : "Nov 09",
+        "open" : 642500.0,
+        "high" : 644000.0,
+        "low" : 633000.0,
+        "close" : 636000.0
+      }, {
+        "time" : "Nov 12",
+        "open" : 636000.0,
+        "high" : 637000.0,
+        "low" : 624500.0,
+        "close" : 625000.0
+      }, {
+        "time" : "Nov 15",
+        "open" : 625000.0,
+        "high" : 627000.0,
+        "low" : 618000.0,
+        "close" : 620500.0
+      }, {
+        "time" : "Nov 17",
+        "open" : 620500.0,
+        "high" : 622000.0,
+        "low" : 614000.0,
+        "close" : 618000.0
+      }, {
+        "time" : "Nov 20",
+        "open" : 618000.0,
+        "high" : 619000.0,
+        "low" : 607500.0,
+        "close" : 608670.0
+      } ],
+      "holdings" : [ {
+        "symbol" : "SET:DOD",
+        "name" : "DOD Biotech PCL",
+        "market" : "thai",
+        "type" : "Stock",
+        "price" : 1.65,
+        "quantity" : 26000.0,
+        "avgCost" : 1.65,
+        "dayChangePct" : -1.79,
+        "currency" : "THB"
+      }, {
+        "symbol" : "SET:PTT",
+        "name" : "PTT Oil and Retail Business PCL",
+        "market" : "thai",
+        "type" : "Stock",
+        "price" : 13.2,
+        "quantity" : 24000.0,
+        "avgCost" : 13.2,
+        "dayChangePct" : -0.75,
+        "currency" : "THB"
+      } ],
+      "lots" : [ ]
+    },
+    "us" : {
+      "title" : "US Stock",
+      "currency" : "USD",
+      "value" : 124500.0,
+      "dayChange" : 820.0,
+      "dayChangePct" : 0.66,
+      "totalChange" : 18450.0,
+      "totalChangePct" : 17.4,
+      "breakdown" : [ {
+        "label" : "Big Tech",
+        "value" : 45,
+        "color" : "#6366F1"
+      }, {
+        "label" : "Industrials",
+        "value" : 20,
+        "color" : "#F97316"
+      }, {
+        "label" : "Healthcare",
+        "value" : 15,
+        "color" : "#06B6D4"
+      }, {
+        "label" : "ETFs",
+        "value" : 20,
+        "color" : "#84CC16"
+      } ],
+      "performance" : {
+        "change" : "+12.8% YTD",
+        "series" : [ 110.0, 112.0, 116.0, 121.0, 124.0, 130.0, 138.0 ]
+      },
+      "series" : [ 112000.0, 114500.0, 113000.0, 116200.0, 118000.0, 119500.0, 120800.0, 121100.0, 122400.0, 123200.0, 124500.0 ],
+      "candlesticks" : [ {
+        "time" : "Oct 27",
+        "open" : 112000.0,
+        "high" : 115500.0,
+        "low" : 111500.0,
+        "close" : 114500.0
+      }, {
+        "time" : "Oct 30",
+        "open" : 114500.0,
+        "high" : 115000.0,
+        "low" : 112000.0,
+        "close" : 113000.0
+      }, {
+        "time" : "Nov 01",
+        "open" : 113000.0,
+        "high" : 117000.0,
+        "low" : 113000.0,
+        "close" : 116200.0
+      }, {
+        "time" : "Nov 03",
+        "open" : 116200.0,
+        "high" : 118500.0,
+        "low" : 115500.0,
+        "close" : 118000.0
+      }, {
+        "time" : "Nov 06",
+        "open" : 118000.0,
+        "high" : 120000.0,
+        "low" : 117500.0,
+        "close" : 119500.0
+      }, {
+        "time" : "Nov 09",
+        "open" : 119500.0,
+        "high" : 121000.0,
+        "low" : 119000.0,
+        "close" : 120800.0
+      }, {
+        "time" : "Nov 12",
+        "open" : 120800.0,
+        "high" : 121800.0,
+        "low" : 120200.0,
+        "close" : 121100.0
+      }, {
+        "time" : "Nov 15",
+        "open" : 121100.0,
+        "high" : 122900.0,
+        "low" : 121000.0,
+        "close" : 122400.0
+      }, {
+        "time" : "Nov 17",
+        "open" : 122400.0,
+        "high" : 123500.0,
+        "low" : 122000.0,
+        "close" : 123200.0
+      }, {
+        "time" : "Nov 20",
+        "open" : 123200.0,
+        "high" : 125000.0,
+        "low" : 123000.0,
+        "close" : 124500.0
+      } ],
+      "holdings" : [ ],
+      "lots" : [ {
+        "id" : "lot-aapl-1",
+        "symbol" : "AAPL",
+        "name" : "Apple Inc.",
+        "market" : "us",
+        "type" : "Stock",
+        "currency" : "USD",
+        "purchaseDate" : "2025-01-10",
+        "purchasePrice" : 170.0,
+        "quantity" : 180.0
+      }, {
+        "id" : "lot-msft-1",
+        "symbol" : "MSFT",
+        "name" : "Microsoft Corp.",
+        "market" : "us",
+        "type" : "Stock",
+        "currency" : "USD",
+        "purchaseDate" : "2024-09-15",
+        "purchasePrice" : 320.0,
+        "quantity" : 110.0
+      }, {
+        "id" : "lot-voo-1",
+        "symbol" : "VOO",
+        "name" : "Vanguard S&P 500 ETF",
+        "market" : "us",
+        "type" : "ETF",
+        "currency" : "USD",
+        "purchaseDate" : "2024-06-03",
+        "purchasePrice" : 400.0,
+        "quantity" : 60.0
+      } ]
+    }
+  },
+  "bonds" : [ {
+    "name" : "Thai Govt 2030",
+    "yield" : "3.4%",
+    "amount" : "THB 1,200,000",
+    "duration" : "6.2 yrs"
+  }, {
+    "name" : "Debenture - Telco",
+    "yield" : "4.8%",
+    "amount" : "THB 600,000",
+    "duration" : "3.0 yrs"
+  }, {
+    "name" : "Infrastructure Bond",
+    "yield" : "5.2%",
+    "amount" : "THB 450,000",
+    "duration" : "8.0 yrs"
+  } ],
+  "gold" : [ {
+    "type" : "Physical Bars",
+    "weight" : "310g",
+    "value" : "THB 750,000",
+    "change" : "+2.1% MoM"
+  }, {
+    "type" : "Gold ETF",
+    "weight" : "9 oz",
+    "value" : "THB 520,000",
+    "change" : "+1.4% MoM"
+  } ],
+  "funds" : [ {
+    "name" : "Global Growth Fund",
+    "exposure" : "70% equity / 30% bonds",
+    "nav" : "THB 820,000",
+    "change" : "+8.2% YTD"
+  }, {
+    "name" : "Asia Dividend",
+    "exposure" : "Regional equities",
+    "nav" : "THB 610,000",
+    "change" : "+4.6% YTD"
+  }, {
+    "name" : "Sustainable Balanced",
+    "exposure" : "60/40 multi-asset",
+    "nav" : "THB 430,000",
+    "change" : "+3.1% YTD"
+  } ],
+  "banks" : {
+    "thai" : {
+      "total" : "THB 2.1M",
+      "accounts" : [ {
+        "bank" : "Bangkok Bank",
+        "balance" : "THB 820,000",
+        "change" : "+18k this month"
+      }, {
+        "bank" : "Kasikorn",
+        "balance" : "THB 540,000",
+        "change" : "+6k this month"
+      }, {
+        "bank" : "SCB Savings",
+        "balance" : "THB 390,000",
+        "change" : "+4k this month"
+      } ],
+      "series" : [ 60.0, 63.0, 62.0, 66.0, 70.0, 72.0, 75.0 ]
+    },
+    "uk" : {
+      "total" : "£41,600",
+      "accounts" : [ {
+        "bank" : "Monzo",
+        "balance" : "£18,400",
+        "change" : "+£320 this month"
+      }, {
+        "bank" : "HSBC UK",
+        "balance" : "£12,800",
+        "change" : "+£180 this month"
+      }, {
+        "bank" : "Nationwide",
+        "balance" : "£10,400",
+        "change" : "+£90 this month"
+      } ],
+      "series" : [ 38.0, 39.0, 40.0, 41.0, 40.0, 41.2, 41.6 ]
+    }
+  },
+  "lottery" : [ {
+    "draw" : "Dec 1",
+    "tickets" : 8,
+    "committed" : "THB 16,000",
+    "estPayout" : "THB 120,000 high tier"
+  }, {
+    "draw" : "Dec 16",
+    "tickets" : 6,
+    "committed" : "THB 12,000",
+    "estPayout" : "THB 45,000 mid tier"
+  } ],
+  "expenses" : {
+    "monthly" : [ {
+      "name" : "Housing & Utilities",
+      "amount" : "THB 38,000",
+      "renewal" : "Monthly autopay"
+    }, {
+      "name" : "Insurance",
+      "amount" : "THB 12,500",
+      "renewal" : "Monthly debit"
+    }, {
+      "name" : "Subscriptions",
+      "amount" : "THB 3,200",
+      "renewal" : "Renew 5th"
+    } ],
+    "yearly" : [ {
+      "name" : "Property Tax",
+      "amount" : "THB 18,000",
+      "renewal" : "Mar 2025"
+    }, {
+      "name" : "Car Insurance",
+      "amount" : "THB 24,000",
+      "renewal" : "Aug 2025"
+    }, {
+      "name" : "Domain & Cloud",
+      "amount" : "THB 6,400",
+      "renewal" : "Jan 2026"
+    } ],
+    "runway" : "11.2 months"
+  }
+}

@@ -3,7 +3,6 @@ package com.assettracker.model;
 import java.util.List;
 
 public record AssetDataset(
-        SummaryData summary,
         StocksData stocks,
         List<BondHolding> bonds,
         List<GoldPosition> gold,

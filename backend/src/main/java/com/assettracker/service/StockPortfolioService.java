@@ -1,105 +1,245 @@
 package com.assettracker.service;
 
 import com.assettracker.model.AddHoldingRequest;
+import com.assettracker.model.AssetDataset;
 import com.assettracker.model.Holding;
+import com.assettracker.model.QuoteResult;
+import com.assettracker.model.StockLot;
+import com.assettracker.model.StockLotView;
+import com.assettracker.model.StockPositionView;
 import com.assettracker.model.StockSummary;
+import com.assettracker.model.StocksData;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 public class StockPortfolioService {
 
     private final QuoteProvider quoteProvider;
-    private final Map<String, Map<String, List<Holding>>> holdingsStore = new HashMap<>();
+    private final UserAssetStore userAssetStore;
 
-    public StockPortfolioService(QuoteProvider quoteProvider) {
+    public StockPortfolioService(QuoteProvider quoteProvider, UserAssetStore userAssetStore) {
         this.quoteProvider = quoteProvider;
-        seedDefaults();
+        this.userAssetStore = userAssetStore;
     }
 
-    public List<Holding> getHoldings(String userId, String market, boolean sortByDayChange) {
-        List<Holding> list = new ArrayList<>(storeForUser(userId).getOrDefault(marketKey(market), List.of()));
-        if (sortByDayChange) {
-            list.sort(Comparator.comparingDouble(Holding::dayChangePct).reversed());
+    public List<StockPositionView> getHoldings(String userId, String market, boolean sortByDayChange) {
+        List<StockPositionView> positions;
+        if ("us".equalsIgnoreCase(market)) {
+            positions = buildUsPositions(userAssetStore.load(userId));
+        } else {
+            StocksData.StockMarketData thai = userAssetStore.load(userId).stocks().thai();
+            positions = thai.holdings().stream().map(this::toReadOnlyPosition).toList();
         }
-        return list;
+
+        if (sortByDayChange) {
+            return positions.stream()
+                    .sorted(Comparator.comparingDouble(StockPositionView::dayChangePct).reversed())
+                    .toList();
+        }
+        return positions;
     }
 
-    public Holding addHolding(String userId, AddHoldingRequest request) {
-        Holding holding = createHoldingWithQuote(request);
-        List<Holding> list = new ArrayList<>(storeForUser(userId).getOrDefault(marketKey(request.market()), List.of()));
-        list.add(holding);
-        storeForUser(userId).put(marketKey(request.market()), list);
-        return holding;
+    public StockPositionView addHolding(String userId, String market, AddHoldingRequest request) {
+        if (!"us".equalsIgnoreCase(market)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only US holdings are editable right now");
+        }
+
+        AssetDataset dataset = userAssetStore.load(userId);
+        StocksData.StockMarketData usData = dataset.stocks().us();
+        List<StockLot> lots = new ArrayList<>(usData.lots() == null ? List.of() : usData.lots());
+        lots.add(new StockLot(
+                UUID.randomUUID().toString(),
+                request.symbol().toUpperCase(Locale.ROOT),
+                request.name(),
+                "us",
+                request.type(),
+                request.currency(),
+                request.purchaseDate().toString(),
+                request.purchasePrice(),
+                request.quantity()
+        ));
+
+        StocksData.StockMarketData updatedUs = new StocksData.StockMarketData(
+                usData.title(),
+                usData.currency(),
+                usData.value(),
+                usData.dayChange(),
+                usData.dayChangePct(),
+                usData.totalChange(),
+                usData.totalChangePct(),
+                usData.breakdown(),
+                usData.performance(),
+                usData.series(),
+                usData.candlesticks(),
+                usData.holdings(),
+                lots
+        );
+
+        AssetDataset updatedDataset = new AssetDataset(
+                new StocksData(dataset.stocks().thai(), updatedUs),
+                dataset.bonds(),
+                dataset.gold(),
+                dataset.funds(),
+                dataset.banks(),
+                dataset.lottery(),
+                dataset.expenses()
+        );
+        userAssetStore.save(userId, updatedDataset);
+
+        return buildUsPositions(updatedDataset).stream()
+                .filter(position -> position.symbol().equalsIgnoreCase(request.symbol()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Holding was saved but could not be reloaded"));
     }
 
     public StockSummary summary(String userId, String market) {
-        List<Holding> list = storeForUser(userId).getOrDefault(marketKey(market), List.of());
-        double totalValue = list.stream().mapToDouble(Holding::marketValue).sum();
-        double weightedDay = list.stream().mapToDouble(h -> h.marketValue() * h.dayChangePct()).sum() / (totalValue == 0 ? 1 : totalValue);
-        double totalChange = list.stream().mapToDouble(h -> (h.price() - h.avgCost()) * h.quantity()).sum();
-        List<Double> series = list.stream().map(Holding::marketValue).collect(Collectors.toList());
-        return new StockSummary(marketKey(market), totalValue, totalValue * weightedDay / 100, weightedDay, totalChange, totalValue == 0 ? 0 : (totalChange / totalValue) * 100, series);
-    }
+        if ("us".equalsIgnoreCase(market)) {
+            AssetDataset dataset = userAssetStore.load(userId);
+            StocksData.StockMarketData usSeed = dataset.stocks().us();
+            List<StockPositionView> positions = buildUsPositions(dataset);
 
-    private Holding createHoldingWithQuote(AddHoldingRequest request) {
-        return quoteProvider.lookup(request.symbol(), request.market())
-                .map(q -> new Holding(
-                        q.symbol(),
-                        q.name(),
-                        q.market(),
-                        q.type(),
-                        q.price(),
-                        request.quantity(),
-                        request.price(),
-                        q.dayChangePct(),
-                        q.currency()
-                ))
-                .orElseGet(() -> new Holding(
-                        request.symbol(),
-                        request.name(),
-                        request.market(),
-                        request.type(),
-                        request.price(),
-                        request.quantity(),
-                        request.price(),
-                        0,
-                        request.currency()
-                ));
-    }
+            double totalValue = positions.stream().mapToDouble(StockPositionView::value).sum();
+            double dayChange = positions.stream().mapToDouble(StockPositionView::dayGain).sum();
+            double totalChange = positions.stream().mapToDouble(StockPositionView::totalChange).sum();
+            double totalCost = positions.stream()
+                    .mapToDouble(position -> position.value() - position.totalChange())
+                    .sum();
 
-    private String userKey(String userId) {
-        return (userId == null || userId.isBlank()) ? "user-123" : userId;
-    }
+            return new StockSummary(
+                    "us",
+                    usSeed.title(),
+                    usSeed.currency(),
+                    totalValue,
+                    dayChange,
+                    totalValue == 0 ? 0 : (dayChange / totalValue) * 100,
+                    totalChange,
+                    totalCost == 0 ? 0 : (totalChange / totalCost) * 100,
+                    usSeed.series(),
+                    usSeed.candlesticks()
+            );
+        }
 
-    private String marketKey(String market) {
-        return (market == null || market.isBlank()) ? "thai" : market.toLowerCase();
-    }
-
-    private Map<String, List<Holding>> storeForUser(String userId) {
-        return holdingsStore.computeIfAbsent(userKey(userId), k -> new HashMap<>());
-    }
-
-    private void seedDefaults() {
-        String user = userKey(null);
-        List<Holding> thai = List.of(
-                new Holding("SET:DOD", "DOD Biotech PCL", "thai", "Stock", 1.65, 26000, 1.65, -1.79, "THB"),
-                new Holding("SET:PTT", "PTT Oil and Retail Business PCL", "thai", "Stock", 13.2, 24000, 13.2, -0.75, "THB")
+        StocksData.StockMarketData thai = userAssetStore.load(userId).stocks().thai();
+        return new StockSummary(
+                "thai",
+                thai.title(),
+                thai.currency(),
+                thai.value(),
+                thai.dayChange(),
+                thai.dayChangePct(),
+                thai.totalChange(),
+                thai.totalChangePct(),
+                thai.series(),
+                thai.candlesticks()
         );
-        List<Holding> us = List.of(
-                new Holding("AAPL", "Apple Inc.", "us", "Stock", 189.75, 180, 170.00, 0.90, "USD"),
-                new Holding("MSFT", "Microsoft Corp.", "us", "Stock", 412.30, 110, 320.00, 0.81, "USD"),
-                new Holding("VOO", "Vanguard S&P 500 ETF", "us", "ETF", 475.10, 60, 400.00, -0.09, "USD")
+    }
+
+    private List<StockPositionView> buildUsPositions(AssetDataset dataset) {
+        List<StockLot> lots = dataset.stocks().us().lots() == null ? List.of() : dataset.stocks().us().lots();
+        Map<String, List<StockLot>> groupedLots = new LinkedHashMap<>();
+        for (StockLot lot : lots) {
+            groupedLots.computeIfAbsent(lot.symbol().toUpperCase(Locale.ROOT), ignored -> new ArrayList<>()).add(lot);
+        }
+
+        List<StockPositionView> positions = new ArrayList<>();
+        for (Map.Entry<String, List<StockLot>> entry : groupedLots.entrySet()) {
+            List<StockLot> tickerLots = entry.getValue();
+            StockLot firstLot = tickerLots.get(0);
+            QuoteResult quote = quoteProvider.lookup(firstLot.symbol(), "us")
+                    .orElseGet(() -> new QuoteResult(firstLot.symbol(), firstLot.name(), "US",
+                            firstLot.type(), firstLot.currency(), firstLot.purchasePrice(), 0));
+
+            double quantity = tickerLots.stream().mapToDouble(StockLot::quantity).sum();
+            double value = quote.price() * quantity;
+            double dayGain = value * (quote.dayChangePct() / 100d);
+            double totalChange = tickerLots.stream()
+                    .mapToDouble(lot -> (quote.price() - lot.purchasePrice()) * lot.quantity())
+                    .sum();
+            double totalCost = tickerLots.stream()
+                    .mapToDouble(lot -> lot.purchasePrice() * lot.quantity())
+                    .sum();
+
+            List<StockLotView> lotViews = tickerLots.stream()
+                    .sorted(Comparator.comparing(StockLot::purchaseDate).reversed())
+                    .map(lot -> {
+                        double lotValue = quote.price() * lot.quantity();
+                        double lotDayGain = lotValue * (quote.dayChangePct() / 100d);
+                        return new StockLotView(
+                                lot.id(),
+                                lot.purchaseDate(),
+                                lot.purchasePrice(),
+                                lot.quantity(),
+                                quote.price(),
+                                lotDayGain,
+                                quote.dayChangePct(),
+                                lotValue
+                        );
+                    })
+                    .toList();
+
+            positions.add(new StockPositionView(
+                    firstLot.symbol(),
+                    firstLot.name(),
+                    "us",
+                    firstLot.type(),
+                    firstLot.currency(),
+                    quote.price(),
+                    quantity,
+                    dayGain,
+                    quote.dayChangePct(),
+                    value,
+                    totalChange,
+                    totalCost == 0 ? 0 : (totalChange / totalCost) * 100,
+                    lotViews
+            ));
+        }
+
+        return positions.stream()
+                .sorted(Comparator.comparing(StockPositionView::symbol))
+                .toList();
+    }
+
+    private StockPositionView toReadOnlyPosition(Holding holding) {
+        double value = holding.marketValue();
+        double dayGain = value * (holding.dayChangePct() / 100d);
+        double totalChange = (holding.price() - holding.avgCost()) * holding.quantity();
+        double totalCost = holding.avgCost() * holding.quantity();
+        StockLotView lotView = new StockLotView(
+                holding.symbol() + "-seed",
+                LocalDate.now().toString(),
+                holding.avgCost(),
+                holding.quantity(),
+                holding.price(),
+                dayGain,
+                holding.dayChangePct(),
+                value
         );
-        holdingsStore.put(user, new HashMap<>());
-        holdingsStore.get(user).put("thai", thai);
-        holdingsStore.get(user).put("us", us);
+        return new StockPositionView(
+                holding.symbol(),
+                holding.name(),
+                holding.market(),
+                holding.type(),
+                holding.currency(),
+                holding.price(),
+                holding.quantity(),
+                dayGain,
+                holding.dayChangePct(),
+                value,
+                totalChange,
+                totalCost == 0 ? 0 : (totalChange / totalCost) * 100,
+                List.of(lotView)
+        );
     }
 }

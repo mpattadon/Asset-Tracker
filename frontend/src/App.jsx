@@ -1,17 +1,12 @@
 import { useState } from 'react'
 import './App.css'
 import {
-  allocation,
   bankData,
   bondHoldings,
   expenseSummary,
   goldPositions,
   lotteryEntries,
   mutualFunds,
-  stockBreakdown,
-  stockPerformance,
-  stockMarkets,
-  summaryCards,
 } from './data/mockData'
 import HomePage from './pages/HomePage'
 import StocksPage from './pages/StocksPage'
@@ -40,9 +35,9 @@ function App({ hideHeader = false }) {
   const renderPage = () => {
     switch (page) {
       case 'home':
-        return <HomePage cards={summaryCards} allocation={allocation} />
+        return <HomePage />
       case 'stocks':
-        return <StocksPage breakdown={stockBreakdown} performance={stockPerformance} markets={stockMarkets} />
+        return <StocksPage />
       case 'bonds':
         return <BondsPage bonds={bondHoldings} />
       case 'gold':
@@ -62,16 +57,22 @@ function App({ hideHeader = false }) {
 
   return (
     <div className="app-shell">
-      <header className={`header ${hideHeader ? 'hidden' : ''}`}>
+      <div className="shell-orb shell-orb--one" />
+      <div className="shell-orb shell-orb--two" />
+      <header className={`header liquid-glass liquid-glass--flow ui-panel ${hideHeader ? 'hidden' : ''}`}>
         <div>
           <p className="eyebrow">Asset Tracker</p>
           <h2 className="brand">Multi-market cockpit</h2>
           <p className="hero-sub">All your assets, organized by category with quick tabs.</p>
         </div>
+        <div className="header-meta">
+          <span className="header-pill">Live pricing</span>
+          <span className="header-pill">US focus</span>
+        </div>
       </header>
 
       <nav
-        className="nav-bar"
+        className="nav-bar liquid-glass liquid-glass--budget liquid-glass--no-clip ui-slider"
         onMouseLeave={() => setNavBlob((prev) => ({ ...prev, visible: false }))}
       >
         <div
@@ -85,7 +86,7 @@ function App({ hideHeader = false }) {
         {PAGES.map((p) => (
           <button
             key={p.id}
-            className={page === p.id ? 'active' : ''}
+            className={`ui-button ui-button--lg nav-button ${page === p.id ? 'active' : ''}`}
             onClick={() => setPage(p.id)}
             onMouseEnter={(e) => {
               const rect = e.currentTarget.getBoundingClientRect()

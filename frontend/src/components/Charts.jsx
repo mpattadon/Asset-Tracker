@@ -1,15 +1,31 @@
 import { useMemo } from 'react'
 
 export function PieDonut({ segments, label }) {
-  const total = useMemo(() => segments.reduce((sum, s) => sum + s.value, 0), [segments])
-  let cursor = 0
-  const gradient = segments
-    .map((segment) => {
-      const start = cursor
-      cursor += (segment.value / total) * 100
-      return `${segment.color} ${start}% ${cursor}%`
-    })
-    .join(', ')
+  const normalizedSegments = useMemo(
+    () => segments.map((segment) => ({
+      label: segment.label ?? segment.area,
+      value: segment.value ?? segment.percent,
+      color: segment.color,
+    })),
+    [segments],
+  )
+  const total = useMemo(() => normalizedSegments.reduce((sum, s) => sum + s.value, 0), [normalizedSegments])
+  if (!normalizedSegments.length || total <= 0) {
+    return null
+  }
+  const gradient = normalizedSegments
+    .reduce(
+      (result, segment) => {
+        const start = result.cursor
+        const end = start + (segment.value / total) * 100
+        return {
+          cursor: end,
+          parts: [...result.parts, `${segment.color} ${start}% ${end}%`],
+        }
+      },
+      { cursor: 0, parts: [] },
+    )
+    .parts.join(', ')
 
   return (
     <div className="pie-card">
@@ -20,7 +36,7 @@ export function PieDonut({ segments, label }) {
         </div>
       </div>
       <div className="legend">
-        {segments.map((s) => (
+        {normalizedSegments.map((s) => (
           <div key={s.label} className="legend-row">
             <span className="dot" style={{ background: s.color }} />
             <span>{s.label}</span>
@@ -33,6 +49,7 @@ export function PieDonut({ segments, label }) {
 }
 
 export function Sparkline({ points, color = '#3B82F6' }) {
+  if (!points?.length) return null
   const max = Math.max(...points)
   const min = Math.min(...points)
   const range = max - min || 1
@@ -58,6 +75,7 @@ export function Sparkline({ points, color = '#3B82F6' }) {
 }
 
 export function AreaChart({ points, color = '#3B82F6' }) {
+  if (!points?.length) return null
   const max = Math.max(...points)
   const min = Math.min(...points)
   const range = max - min || 1

@@ -10,11 +10,11 @@ export default function BanksPage({ banks }) {
       title="Banks"
       subtitle="Split between Thai and UK institutions"
       actions={
-        <div className="tab-switch">
-          <button className={tab === 'thai' ? 'active' : ''} onClick={() => setTab('thai')}>
+        <div className="tab-switch ui-slider liquid-glass liquid-glass--budget">
+          <button className={`ui-button ui-button--no-shift ${tab === 'thai' ? 'active' : ''}`} onClick={() => setTab('thai')}>
             Thai Banks
           </button>
-          <button className={tab === 'uk' ? 'active' : ''} onClick={() => setTab('uk')}>
+          <button className={`ui-button ui-button--no-shift ${tab === 'uk' ? 'active' : ''}`} onClick={() => setTab('uk')}>
             UK Banks
           </button>
         </div>
