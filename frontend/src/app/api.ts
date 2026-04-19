@@ -106,6 +106,35 @@ export interface StockPositionView {
   lots: StockLotView[];
 }
 
+export interface StockTransactionView {
+  id: string;
+  transactionType: "BUY" | "SELL" | "DIVIDEND" | string;
+  date: string;
+  symbol: string;
+  name: string;
+  market: string;
+  currency: string;
+  quantity: number | null;
+  pricePerUnit: number | null;
+  feeNetUsd: number | null;
+  feeNetThb: number | null;
+  fxActualRate: number | null;
+  fxDimeRate: number | null;
+  usdActual: number | null;
+  bahtActual: number | null;
+  totalUsd: number | null;
+  totalBahtDime: number | null;
+  netPricePerShare: number | null;
+  realizedPnl: number | null;
+  realizedPnlPct: number | null;
+  unitsEntitled: number | null;
+  dividendPerShare: number | null;
+  grossDividend: number | null;
+  withholdingTaxRate: number | null;
+  withholdingTaxAmount: number | null;
+  netDividend: number | null;
+}
+
 export interface QuoteResult {
   symbol: string;
   name: string;
@@ -125,6 +154,24 @@ export interface AddHoldingPayload {
   purchaseDate: string;
   quantity: number;
   purchasePrice: number;
+}
+
+export interface CreateStockTransactionPayload {
+  transactionType: "BUY" | "SELL" | "DIVIDEND";
+  symbol: string;
+  name: string;
+  market: string;
+  type: string;
+  currency: string;
+  transactionDate: string;
+  quantity?: number | null;
+  pricePerUnit?: number | null;
+  feeNetUsd?: number | null;
+  feeNetThb?: number | null;
+  fxActualRate?: number | null;
+  fxDimeRate?: number | null;
+  dividendPerShare?: number | null;
+  withholdingTaxRate?: number | null;
 }
 
 export interface SyncStatus {
@@ -235,6 +282,12 @@ export function getStockHoldings(market: string, sortByDay = false) {
   );
 }
 
+export function getStockTransactions(market: string) {
+  return apiFetch<StockTransactionView[]>(
+    `/api/stocks/markets/${encodeURIComponent(market)}/transactions`,
+  );
+}
+
 export function searchStocks(query: string, market: string) {
   return apiFetch<QuoteResult[]>(
     `/api/stocks/search?query=${encodeURIComponent(query)}&market=${encodeURIComponent(market)}`,
@@ -249,6 +302,19 @@ export function addHolding(market: string, payload: AddHoldingPayload) {
     },
     body: JSON.stringify(payload),
   });
+}
+
+export function addStockTransaction(market: string, payload: CreateStockTransactionPayload) {
+  return apiFetch<StockTransactionView>(
+    `/api/stocks/markets/${encodeURIComponent(market)}/transactions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function getAuthBootstrap() {

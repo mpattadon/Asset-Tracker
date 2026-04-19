@@ -18,68 +18,41 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { TrendingUp, TrendingDown, Plus, ChevronDown, ChevronUp } from "lucide-react";
+import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { AddStockDialog } from "../components/AddStockDialog";
-import { PageContainer, PageHeader, SummaryCard, SummaryGrid, DataCard } from "../components/layout/index";
+import {
+  DataCard,
+  PageContainer,
+  PageHeader,
+  SummaryCard,
+  SummaryGrid,
+} from "../components/layout/index";
 import {
   Candlestick,
   getStockHoldings,
-  getStockSeed,
   getStockSummary,
+  getStockTransactions,
   StockLotView,
-  StockMarketSeed,
   StockPositionView,
   StockSummary,
+  StockTransactionView,
 } from "../api";
 
 type MarketKey = "us" | "thai";
+type TransactionFilter = "all" | "BUY" | "SELL" | "DIVIDEND";
 
-interface DisplayMarket {
-  title: string;
-  currency: string;
-  value: number;
-  dayChange: number;
-  dayChangePct: number;
-  totalChange: number;
-  totalChangePct: number;
-  series: number[];
-  candlesticks: Candlestick[];
+interface MarketSnapshot {
+  summary: StockSummary | null;
   holdings: StockPositionView[];
+  transactions: StockTransactionView[];
 }
 
-function normalizeSeedHolding(holding: StockMarketSeed["holdings"][number]): StockPositionView {
-  const value = holding.price * holding.quantity;
-  const dayGain = value * ((holding.dayChangePct ?? 0) / 100);
-  return {
-    symbol: holding.symbol,
-    name: holding.name,
-    market: holding.market,
-    type: holding.type,
-    currency: holding.currency,
-    price: holding.price,
-    quantity: holding.quantity,
-    dayGain,
-    dayChangePct: holding.dayChangePct,
-    value,
-    totalChange: (holding.price - holding.avgCost) * holding.quantity,
-    totalChangePct: holding.avgCost
-      ? ((holding.price - holding.avgCost) / holding.avgCost) * 100
-      : 0,
-    lots: [
-      {
-        id: `${holding.symbol}-seed`,
-        purchaseDate: "Read-only seed",
-        purchasePrice: holding.avgCost,
-        quantity: holding.quantity,
-        currentPrice: holding.price,
-        dayGain,
-        dayChangePct: holding.dayChangePct,
-        value,
-      },
-    ],
-  };
-}
+const EMPTY_MARKET: MarketSnapshot = {
+  summary: null,
+  holdings: [],
+  transactions: [],
+};
 
 function symbolForCurrency(currency: string) {
   return (
@@ -100,6 +73,35 @@ function formatMoney(currency: string, amount: number, maximumFractionDigits = 2
   })}`;
 }
 
+function formatOptionalMoney(currency: string, amount: number | null, maximumFractionDigits = 2) {
+  if (amount == null) {
+    return "—";
+  }
+  return formatMoney(currency, amount, maximumFractionDigits);
+}
+
+function formatOptionalNumber(value: number | null, maximumFractionDigits = 4) {
+  if (value == null) {
+    return "—";
+  }
+  return value.toLocaleString("en-US", { maximumFractionDigits });
+}
+
+function emptySummary(market: MarketKey): StockSummary {
+  return {
+    market,
+    title: market === "us" ? "US Stock" : "Thai Stock",
+    currency: market === "us" ? "USD" : "THB",
+    totalValue: 0,
+    dayChange: 0,
+    dayChangePct: 0,
+    totalChange: 0,
+    totalChangePct: 0,
+    series: [0, 0, 0, 0, 0, 0],
+    candlesticks: [],
+  };
+}
+
 function buildChartData(series: number[], candlesticks: Candlestick[]) {
   return series.map((value, index) => ({
     date: candlesticks[index]?.time ?? `P${index + 1}`,
@@ -107,146 +109,130 @@ function buildChartData(series: number[], candlesticks: Candlestick[]) {
   }));
 }
 
-function lotSortValue(date: string) {
-  const timestamp = Date.parse(date);
-  return Number.isNaN(timestamp) ? Number.MIN_SAFE_INTEGER : timestamp;
-}
-
-function buildTransactions(holdings: StockPositionView[]) {
-  return holdings
-    .flatMap((position) =>
-      position.lots.map((lot) => ({
-        id: lot.id,
-        date: lot.purchaseDate,
-        ticker: position.symbol,
-        type: position.type,
-        units: lot.quantity,
-        purchasePrice: lot.purchasePrice,
-        currentPrice: lot.currentPrice,
-        dayGain: lot.dayGain,
-        currentValue: lot.value,
-      })),
-    )
-    .sort((left, right) => lotSortValue(right.date) - lotSortValue(left.date));
-}
-
 function averageCost(position: StockPositionView) {
   const totalCost = position.value - position.totalChange;
   return position.quantity > 0 ? totalCost / position.quantity : 0;
 }
 
+function transactionUnits(transaction: StockTransactionView) {
+  return transaction.quantity ?? transaction.unitsEntitled ?? 0;
+}
+
+function transactionPrice(transaction: StockTransactionView) {
+  return transaction.pricePerUnit ?? transaction.dividendPerShare;
+}
+
+function transactionNetAmount(transaction: StockTransactionView) {
+  return transaction.transactionType === "DIVIDEND" ? transaction.netDividend : transaction.totalUsd;
+}
+
+function transactionTypeLabel(transactionType: string) {
+  switch (transactionType) {
+    case "BUY":
+      return "Buy";
+    case "SELL":
+      return "Sell";
+    case "DIVIDEND":
+      return "Div";
+    default:
+      return transactionType;
+  }
+}
+
 export function Stocks() {
   const [market, setMarket] = useState<MarketKey>("us");
-  const [seedData, setSeedData] = useState<{ thai: StockMarketSeed; us: StockMarketSeed } | null>(
-    null,
-  );
-  const [metaLoading, setMetaLoading] = useState(true);
-  const [metaError, setMetaError] = useState("");
-  const [marketLoading, setMarketLoading] = useState(false);
-  const [marketError, setMarketError] = useState("");
+  const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>("all");
   const [sortByDay, setSortByDay] = useState(false);
-  const [usSummary, setUsSummary] = useState<StockSummary | null>(null);
-  const [usHoldings, setUsHoldings] = useState<StockPositionView[]>([]);
   const [expandedStock, setExpandedStock] = useState<string | null>(null);
   const [addStockOpen, setAddStockOpen] = useState(false);
+  const [marketState, setMarketState] = useState<Record<MarketKey, MarketSnapshot>>({
+    us: EMPTY_MARKET,
+    thai: EMPTY_MARKET,
+  });
+  const [loadingState, setLoadingState] = useState<Record<MarketKey, boolean>>({
+    us: false,
+    thai: false,
+  });
+  const [marketError, setMarketError] = useState("");
 
-  const loadSeeds = useCallback(async () => {
-    setMetaLoading(true);
-    setMetaError("");
-    try {
-      const [thai, us] = await Promise.all([getStockSeed("thai"), getStockSeed("us")]);
-      setSeedData({ thai, us });
-    } catch (requestError) {
-      setMetaError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Unable to load stock market data.",
-      );
-    } finally {
-      setMetaLoading(false);
-    }
-  }, []);
-
-  const loadUsMarket = useCallback(async () => {
-    setMarketLoading(true);
-    setMarketError("");
-    try {
-      const [summary, holdings] = await Promise.all([
-        getStockSummary("us"),
-        getStockHoldings("us", sortByDay),
-      ]);
-      setUsSummary(summary);
-      setUsHoldings(holdings);
-    } catch (requestError) {
-      setMarketError(
-        requestError instanceof Error ? requestError.message : "Unable to load US market data.",
-      );
-    } finally {
-      setMarketLoading(false);
-    }
-  }, [sortByDay]);
-
-  useEffect(() => {
-    loadSeeds();
-  }, [loadSeeds]);
-
-  useEffect(() => {
-    if (market === "us") {
-      loadUsMarket();
-    }
-  }, [market, loadUsMarket]);
-
-  const thaiMarket = useMemo<DisplayMarket | null>(() => {
-    if (!seedData?.thai) {
-      return null;
-    }
-    return {
-      title: seedData.thai.title,
-      currency: seedData.thai.currency,
-      value: seedData.thai.value,
-      dayChange: seedData.thai.dayChange,
-      dayChangePct: seedData.thai.dayChangePct,
-      totalChange: seedData.thai.totalChange,
-      totalChangePct: seedData.thai.totalChangePct,
-      series: seedData.thai.series,
-      candlesticks: seedData.thai.candlesticks,
-      holdings: (seedData.thai.holdings ?? []).map(normalizeSeedHolding),
-    };
-  }, [seedData]);
-
-  const usMarket = useMemo<DisplayMarket | null>(() => {
-    if (!seedData?.us) {
-      return null;
-    }
-    return {
-      title: usSummary?.title ?? seedData.us.title,
-      currency: usSummary?.currency ?? seedData.us.currency,
-      value: usSummary?.totalValue ?? seedData.us.value,
-      dayChange: usSummary?.dayChange ?? seedData.us.dayChange,
-      dayChangePct: usSummary?.dayChangePct ?? seedData.us.dayChangePct,
-      totalChange: usSummary?.totalChange ?? seedData.us.totalChange,
-      totalChangePct: usSummary?.totalChangePct ?? seedData.us.totalChangePct,
-      series: usSummary?.series?.length ? usSummary.series : seedData.us.series,
-      candlesticks: usSummary?.candlesticks?.length ? usSummary.candlesticks : seedData.us.candlesticks,
-      holdings: usHoldings,
-    };
-  }, [seedData, usSummary, usHoldings]);
-
-  const currentMarket = market === "us" ? usMarket : thaiMarket;
-  const currentHoldings = currentMarket?.holdings ?? [];
-  const currentCurrency = currentMarket?.currency ?? (market === "us" ? "USD" : "THB");
-  const chartData = useMemo(
-    () => buildChartData(currentMarket?.series ?? [], currentMarket?.candlesticks ?? []),
-    [currentMarket],
+  const loadMarket = useCallback(
+    async (marketKey: MarketKey) => {
+      setLoadingState((current) => ({ ...current, [marketKey]: true }));
+      setMarketError("");
+      try {
+        const [summary, holdings, transactions] = await Promise.all([
+          getStockSummary(marketKey),
+          getStockHoldings(marketKey, sortByDay),
+          getStockTransactions(marketKey),
+        ]);
+        setMarketState((current) => ({
+          ...current,
+          [marketKey]: {
+            summary,
+            holdings,
+            transactions,
+          },
+        }));
+      } catch (requestError) {
+        setMarketError(
+          requestError instanceof Error
+            ? requestError.message
+            : `Unable to load ${marketKey} stock data.`,
+        );
+      } finally {
+        setLoadingState((current) => ({ ...current, [marketKey]: false }));
+      }
+    },
+    [sortByDay],
   );
-  const transactions = useMemo(() => buildTransactions(currentHoldings), [currentHoldings]);
 
-  const portfolioValue = currentMarket?.value ?? 0;
-  const totalCost = currentHoldings.reduce((sum, position) => sum + (position.value - position.totalChange), 0);
+  useEffect(() => {
+    loadMarket(market);
+  }, [loadMarket, market]);
+
+  useEffect(() => {
+    setTransactionFilter("all");
+    setExpandedStock(null);
+  }, [market]);
+
+  const currentSnapshot = marketState[market];
+  const loading = loadingState[market];
+  const currentSummary = currentSnapshot.summary ?? emptySummary(market);
+  const currentHoldings = currentSnapshot.holdings;
+  const currentTransactions = currentSnapshot.transactions;
+  const currentCurrency = currentSummary.currency;
+  const chartData = useMemo(
+    () => buildChartData(currentSummary.series ?? [], currentSummary.candlesticks ?? []),
+    [currentSummary],
+  );
+
+  const filteredTransactions = useMemo(() => {
+    if (transactionFilter === "all") {
+      return currentTransactions;
+    }
+    return currentTransactions.filter(
+      (transaction) => transaction.transactionType === transactionFilter,
+    );
+  }, [currentTransactions, transactionFilter]);
+
+  const transactionCounts = useMemo(
+    () => ({
+      all: currentTransactions.length,
+      BUY: currentTransactions.filter((transaction) => transaction.transactionType === "BUY").length,
+      SELL: currentTransactions.filter((transaction) => transaction.transactionType === "SELL").length,
+      DIVIDEND: currentTransactions.filter((transaction) => transaction.transactionType === "DIVIDEND").length,
+    }),
+    [currentTransactions],
+  );
+
+  const portfolioValue = currentSummary.totalValue;
+  const totalCost = currentHoldings.reduce(
+    (sum, position) => sum + (position.value - position.totalChange),
+    0,
+  );
   const totalGainLoss = currentHoldings.reduce((sum, position) => sum + position.totalChange, 0);
   const totalGainLossPercent = totalCost > 0 ? (totalGainLoss / totalCost) * 100 : 0;
   const isPositive = totalGainLoss >= 0;
-  const readOnly = market === "thai";
 
   return (
     <PageContainer>
@@ -260,26 +246,15 @@ export function Stocks() {
             <SelectItem value="thai">Thai Market</SelectItem>
           </SelectContent>
         </Select>
-        {market === "us" ? (
-          <>
-            <Button variant="outline" size="sm" onClick={() => setSortByDay((current) => !current)}>
-              Sort by day % {sortByDay ? "on" : "off"}
-            </Button>
-            <Button size="sm" onClick={() => setAddStockOpen(true)} className="gap-2">
-              <Plus className="w-4 h-4" />
-              Add Investment
-            </Button>
-          </>
-        ) : (
-          <Badge variant="outline">Thai market is read-only for now</Badge>
-        )}
+        <Button variant="outline" size="sm" onClick={() => setSortByDay((current) => !current)}>
+          Sort by day % {sortByDay ? "on" : "off"}
+        </Button>
+        <Button size="sm" onClick={() => setAddStockOpen(true)} className="gap-2">
+          <Plus className="h-4 w-4" />
+          Add Transaction
+        </Button>
       </PageHeader>
 
-      {metaError ? (
-        <Card className="border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {metaError}
-        </Card>
-      ) : null}
       {marketError ? (
         <Card className="border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {marketError}
@@ -297,16 +272,16 @@ export function Stocks() {
           <SummaryGrid>
             <SummaryCard
               label="Portfolio Value"
-              value={metaLoading || marketLoading ? "Loading..." : formatMoney(currentCurrency, portfolioValue)}
+              value={loading ? "Loading..." : formatMoney(currentCurrency, portfolioValue)}
             />
             <SummaryCard
               label="Total Cost"
-              value={metaLoading || marketLoading ? "Loading..." : formatMoney(currentCurrency, totalCost)}
+              value={loading ? "Loading..." : formatMoney(currentCurrency, totalCost)}
             />
             <SummaryCard
               label="Total Gain/Loss"
               value={
-                metaLoading || marketLoading
+                loading
                   ? "Loading..."
                   : `${isPositive ? "+" : "-"}${formatMoney(currentCurrency, Math.abs(totalGainLoss))}`
               }
@@ -314,35 +289,29 @@ export function Stocks() {
             />
           </SummaryGrid>
 
-          <DataCard className="p-8 bg-white border-gray-200 shadow-sm">
+          <DataCard className="border-gray-200 bg-white p-8 shadow-sm">
             <div className="mb-6 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-lg font-normal text-gray-900">
-                  {currentMarket?.title ?? "Portfolio Performance"}
-                </h3>
+                <h3 className="text-lg font-normal text-gray-900">{currentSummary.title}</h3>
                 <p className="text-sm text-gray-500">
-                  {readOnly
-                    ? "Thai market seed data is visible in read-only mode."
-                    : "US holdings are aggregated from saved lots and live pricing."}
+                  Portfolio performance is calculated from the saved buy, sell, and dividend ledger.
                 </p>
               </div>
-              {!metaLoading && !marketLoading && currentMarket ? (
-                <p className={currentMarket.dayChange >= 0 ? "text-sm text-green-600" : "text-sm text-red-600"}>
-                  {currentMarket.dayChange >= 0 ? "+" : "-"}
-                  {formatMoney(currentCurrency, Math.abs(currentMarket.dayChange))} (
-                  {Math.abs(currentMarket.dayChangePct).toFixed(2)}%)
+              {!loading ? (
+                <p
+                  className={
+                    currentSummary.dayChange >= 0 ? "text-sm text-green-600" : "text-sm text-red-600"
+                  }
+                >
+                  {currentSummary.dayChange >= 0 ? "+" : "-"}
+                  {formatMoney(currentCurrency, Math.abs(currentSummary.dayChange))} (
+                  {Math.abs(currentSummary.dayChangePct).toFixed(2)}%)
                 </p>
               ) : null}
             </div>
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={chartData}>
-                <XAxis
-                  dataKey="date"
-                  stroke="#9ca3af"
-                  fontSize={12}
-                  tickLine={false}
-                  axisLine={false}
-                />
+                <XAxis dataKey="date" stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis
                   stroke="#9ca3af"
                   fontSize={12}
@@ -364,15 +333,16 @@ export function Stocks() {
             </ResponsiveContainer>
           </DataCard>
 
-          <DataCard className="bg-white border-gray-200 shadow-sm">
+          <DataCard className="border-gray-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-gray-200 p-6">
-              <h3 className="text-lg font-normal text-gray-900">Holdings</h3>
-              {!readOnly ? (
-                <Button size="sm" onClick={() => setAddStockOpen(true)} className="gap-2">
-                  <Plus className="w-4 h-4" />
-                  Add Investment
-                </Button>
-              ) : null}
+              <div>
+                <h3 className="text-lg font-normal text-gray-900">Holdings</h3>
+                <p className="text-sm text-gray-500">Open positions derived from FIFO lots.</p>
+              </div>
+              <Button size="sm" onClick={() => setAddStockOpen(true)} className="gap-2">
+                <Plus className="h-4 w-4" />
+                Add Transaction
+              </Button>
             </div>
             <div className="overflow-x-auto">
               <Table>
@@ -380,11 +350,11 @@ export function Stocks() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="font-medium text-gray-600">Ticker</TableHead>
                     <TableHead className="font-medium text-gray-600">Company Name</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Quantity</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Avg Cost</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Current Price</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Total Value</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Gain/Loss</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Quantity</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Avg Cost</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Current Price</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Total Value</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Gain/Loss</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -410,19 +380,11 @@ export function Stocks() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex flex-col items-end">
-                              <span
-                                className={`font-medium ${
-                                  stockPositive ? "text-green-600" : "text-red-600"
-                                }`}
-                              >
+                              <span className={`font-medium ${stockPositive ? "text-green-600" : "text-red-600"}`}>
                                 {stockPositive ? "+" : "-"}
                                 {formatMoney(currentCurrency, Math.abs(stock.totalChange))}
                               </span>
-                              <span
-                                className={`text-xs ${
-                                  stockPositive ? "text-green-600" : "text-red-600"
-                                }`}
-                              >
+                              <span className={`text-xs ${stockPositive ? "text-green-600" : "text-red-600"}`}>
                                 ({stockPositive ? "+" : "-"}
                                 {Math.abs(stock.totalChangePct).toFixed(2)}%)
                               </span>
@@ -434,11 +396,7 @@ export function Stocks() {
                   ) : (
                     <TableRow>
                       <TableCell colSpan={7} className="py-10 text-center text-sm text-gray-500">
-                        {metaLoading || marketLoading
-                          ? "Loading holdings..."
-                          : readOnly
-                            ? "No Thai holdings available."
-                            : "No US holdings yet. Add your first investment."}
+                        {loading ? "Loading holdings..." : "No holdings recorded yet. Add your first transaction."}
                       </TableCell>
                     </TableRow>
                   )}
@@ -449,93 +407,131 @@ export function Stocks() {
         </TabsContent>
 
         <TabsContent value="transactions" className="space-y-6">
-          {!readOnly ? (
-            <div className="flex justify-end">
-              <Button onClick={() => setAddStockOpen(true)} className="gap-2">
-                <Plus className="w-4 h-4" />
-                Add Investment
-              </Button>
-            </div>
-          ) : null}
+          <div className="flex justify-end">
+            <Button onClick={() => setAddStockOpen(true)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Add Transaction
+            </Button>
+          </div>
 
-          <DataCard className="bg-white border-gray-200 shadow-sm">
-            <div className="p-6 border-b border-gray-200">
-              <h3 className="text-lg font-normal text-gray-900">Purchase History</h3>
+          <DataCard className="border-gray-200 bg-white shadow-sm">
+            <div className="border-b border-gray-200 p-6">
+              <h3 className="text-lg font-normal text-gray-900">Transaction Ledger</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Buys, sells, and dividends are stored as raw events. Everything else is derived by the backend.
+              </p>
             </div>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="font-medium text-gray-600">Date</TableHead>
-                    <TableHead className="font-medium text-gray-600">Ticker</TableHead>
-                    <TableHead className="font-medium text-gray-600">Type</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Units</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Purchase Price</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Current Price</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Day Gain</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Current Value</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {transactions.length ? (
-                    transactions.map((transaction) => (
-                      <TableRow key={transaction.id} className="hover:bg-gray-50">
-                        <TableCell className="text-gray-900">{transaction.date}</TableCell>
-                        <TableCell className="font-medium text-gray-900">{transaction.ticker}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{transaction.type}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right text-gray-900">
-                          {transaction.units.toLocaleString("en-US", { maximumFractionDigits: 4 })}
-                        </TableCell>
-                        <TableCell className="text-right text-gray-900">
-                          {formatMoney(currentCurrency, transaction.purchasePrice)}
-                        </TableCell>
-                        <TableCell className="text-right text-gray-900">
-                          {formatMoney(currentCurrency, transaction.currentPrice)}
-                        </TableCell>
-                        <TableCell
-                          className={`text-right ${
-                            transaction.dayGain >= 0 ? "text-green-600" : "text-red-600"
-                          }`}
-                        >
-                          {transaction.dayGain >= 0 ? "+" : "-"}
-                          {formatMoney(currentCurrency, Math.abs(transaction.dayGain))}
-                        </TableCell>
-                        <TableCell className="text-right text-gray-900">
-                          {formatMoney(currentCurrency, transaction.currentValue)}
-                        </TableCell>
+
+            <Tabs
+              value={transactionFilter}
+              onValueChange={(value) => setTransactionFilter(value as TransactionFilter)}
+              className="space-y-0"
+            >
+              <div className="border-b border-gray-200 px-6 py-4">
+                <TabsList className="grid w-full grid-cols-4">
+                  <TabsTrigger value="all">All ({transactionCounts.all})</TabsTrigger>
+                  <TabsTrigger value="BUY">Buy ({transactionCounts.BUY})</TabsTrigger>
+                  <TabsTrigger value="SELL">Sell ({transactionCounts.SELL})</TabsTrigger>
+                  <TabsTrigger value="DIVIDEND">Divs ({transactionCounts.DIVIDEND})</TabsTrigger>
+                </TabsList>
+              </div>
+
+              <TabsContent value={transactionFilter} className="mt-0">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="font-medium text-gray-600">Date</TableHead>
+                        <TableHead className="font-medium text-gray-600">Ticker</TableHead>
+                        <TableHead className="font-medium text-gray-600">Type</TableHead>
+                        <TableHead className="text-right font-medium text-gray-600">Units</TableHead>
+                        <TableHead className="text-right font-medium text-gray-600">Price / Unit</TableHead>
+                        <TableHead className="text-right font-medium text-gray-600">Fee USD</TableHead>
+                        <TableHead className="text-right font-medium text-gray-600">Net Amount</TableHead>
+                        <TableHead className="text-right font-medium text-gray-600">Realized P/L</TableHead>
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={8} className="py-10 text-center text-sm text-gray-500">
-                        No purchase history available.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredTransactions.length ? (
+                        filteredTransactions.map((transaction) => (
+                          <TableRow key={transaction.id} className="hover:bg-gray-50">
+                            <TableCell className="text-gray-900">{transaction.date}</TableCell>
+                            <TableCell className="font-medium text-gray-900">
+                              <div className="flex flex-col">
+                                <span>{transaction.symbol}</span>
+                                <span className="text-xs text-gray-500">{transaction.name}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{transactionTypeLabel(transaction.transactionType)}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right text-gray-900">
+                              {formatOptionalNumber(transactionUnits(transaction))}
+                            </TableCell>
+                            <TableCell className="text-right text-gray-900">
+                              {formatOptionalMoney(currentCurrency, transactionPrice(transaction))}
+                            </TableCell>
+                            <TableCell className="text-right text-gray-900">
+                              {formatOptionalMoney("USD", transaction.feeNetUsd, 4)}
+                            </TableCell>
+                            <TableCell className="text-right text-gray-900">
+                              <div className="flex flex-col items-end">
+                                <span>{formatOptionalMoney(currentCurrency, transactionNetAmount(transaction))}</span>
+                                {transaction.transactionType === "DIVIDEND" &&
+                                transaction.withholdingTaxAmount != null ? (
+                                  <span className="text-xs text-gray-500">
+                                    WHT {formatOptionalMoney(currentCurrency, transaction.withholdingTaxAmount)}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                            <TableCell
+                              className={`text-right ${
+                                (transaction.realizedPnl ?? 0) >= 0 ? "text-green-600" : "text-red-600"
+                              }`}
+                            >
+                              {transaction.realizedPnl == null
+                                ? "—"
+                                : `${transaction.realizedPnl >= 0 ? "+" : "-"}${formatMoney(
+                                    currentCurrency,
+                                    Math.abs(transaction.realizedPnl),
+                                  )}`}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={8} className="py-10 text-center text-sm text-gray-500">
+                            {loading
+                              ? "Loading transactions..."
+                              : "No transactions recorded for this section yet."}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </TabsContent>
+            </Tabs>
           </DataCard>
         </TabsContent>
 
         <TabsContent value="per-stock" className="space-y-6">
-          <DataCard className="bg-white border-gray-200 shadow-sm">
-            <div className="p-6 border-b border-gray-200">
+          <DataCard className="border-gray-200 bg-white shadow-sm">
+            <div className="border-b border-gray-200 p-6">
               <h3 className="text-lg font-normal text-gray-900">Grouped Positions</h3>
             </div>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="font-medium text-gray-600 w-12"></TableHead>
+                    <TableHead className="w-12 font-medium text-gray-600"></TableHead>
                     <TableHead className="font-medium text-gray-600">Ticker</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Total Volume</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Avg Cost</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Current Price</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Total Value</TableHead>
-                    <TableHead className="font-medium text-gray-600 text-right">Gain/Loss</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Total Volume</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Avg Cost</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Current Price</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Total Value</TableHead>
+                    <TableHead className="text-right font-medium text-gray-600">Gain/Loss</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -546,16 +542,14 @@ export function Stocks() {
                       return (
                         <Fragment key={stock.symbol}>
                           <TableRow
-                            className="hover:bg-gray-50 cursor-pointer"
-                            onClick={() =>
-                              setExpandedStock(expanded ? null : stock.symbol)
-                            }
+                            className="cursor-pointer hover:bg-gray-50"
+                            onClick={() => setExpandedStock(expanded ? null : stock.symbol)}
                           >
                             <TableCell>
                               {expanded ? (
-                                <ChevronUp className="w-4 h-4 text-gray-400" />
+                                <ChevronUp className="h-4 w-4 text-gray-400" />
                               ) : (
-                                <ChevronDown className="w-4 h-4 text-gray-400" />
+                                <ChevronDown className="h-4 w-4 text-gray-400" />
                               )}
                             </TableCell>
                             <TableCell className="font-medium text-gray-900">{stock.symbol}</TableCell>
@@ -584,7 +578,7 @@ export function Stocks() {
                           {expanded ? (
                             <TableRow>
                               <TableCell colSpan={7} className="bg-gray-50 p-6">
-                                <h4 className="mb-4 text-sm font-medium text-gray-900">Lots</h4>
+                                <h4 className="mb-4 text-sm font-medium text-gray-900">Open Lots</h4>
                                 <div className="space-y-2">
                                   {stock.lots.map((lot: StockLotView) => (
                                     <div
@@ -592,11 +586,11 @@ export function Stocks() {
                                       className="grid gap-3 rounded-lg border border-gray-200 bg-white p-4 sm:grid-cols-5"
                                     >
                                       <div>
-                                        <p className="text-xs text-gray-500 mb-1">Purchase Date</p>
+                                        <p className="mb-1 text-xs text-gray-500">Purchase Date</p>
                                         <p className="text-sm text-gray-900">{lot.purchaseDate}</p>
                                       </div>
                                       <div>
-                                        <p className="text-xs text-gray-500 mb-1">Quantity</p>
+                                        <p className="mb-1 text-xs text-gray-500">Quantity</p>
                                         <p className="text-sm text-gray-900">
                                           {lot.quantity.toLocaleString("en-US", {
                                             maximumFractionDigits: 4,
@@ -604,19 +598,19 @@ export function Stocks() {
                                         </p>
                                       </div>
                                       <div>
-                                        <p className="text-xs text-gray-500 mb-1">Purchase Price</p>
+                                        <p className="mb-1 text-xs text-gray-500">Cost / Unit</p>
                                         <p className="text-sm text-gray-900">
                                           {formatMoney(currentCurrency, lot.purchasePrice)}
                                         </p>
                                       </div>
                                       <div>
-                                        <p className="text-xs text-gray-500 mb-1">Current Price</p>
+                                        <p className="mb-1 text-xs text-gray-500">Current Price</p>
                                         <p className="text-sm text-gray-900">
                                           {formatMoney(currentCurrency, lot.currentPrice)}
                                         </p>
                                       </div>
                                       <div>
-                                        <p className="text-xs text-gray-500 mb-1">Current Value</p>
+                                        <p className="mb-1 text-xs text-gray-500">Current Value</p>
                                         <p className="text-sm text-gray-900">
                                           {formatMoney(currentCurrency, lot.value)}
                                         </p>
@@ -645,11 +639,13 @@ export function Stocks() {
       </Tabs>
 
       <AddStockDialog
+        market={market}
+        holdings={currentHoldings}
         open={addStockOpen}
         onOpenChange={setAddStockOpen}
         onCreated={async (symbol) => {
           setExpandedStock(symbol);
-          await loadUsMarket();
+          await loadMarket(market);
         }}
       />
     </PageContainer>

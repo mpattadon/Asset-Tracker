@@ -4,6 +4,8 @@ import com.assettracker.model.AddHoldingRequest;
 import com.assettracker.model.QuoteResult;
 import com.assettracker.model.StockPositionView;
 import com.assettracker.model.StockSummary;
+import com.assettracker.model.StockTransactionRequest;
+import com.assettracker.model.StockTransactionView;
 import com.assettracker.service.CurrentUserService;
 import com.assettracker.service.MarketDataProvider;
 import com.assettracker.service.QuoteProvider;
@@ -65,6 +67,21 @@ public class StockController {
                                 @RequestHeader(value = "X-User-Id", required = false) String userId,
                                 @PathVariable String market) {
         return stockPortfolioService.summary(request, userId, market);
+    }
+
+    @GetMapping("/markets/{market}/transactions")
+    public List<StockTransactionView> transactions(HttpServletRequest request,
+                                                   @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                                   @PathVariable String market) {
+        return stockPortfolioService.transactions(request, userId, market);
+    }
+
+    @PostMapping("/markets/{market}/transactions")
+    public StockTransactionView addTransaction(HttpServletRequest request,
+                                               @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                               @PathVariable String market,
+                                               @Valid @RequestBody StockTransactionRequest transactionRequest) {
+        return stockPortfolioService.addTransaction(request, userId, market, transactionRequest);
     }
 
     @GetMapping("/search")

@@ -1,0 +1,31 @@
+package com.assettracker.model;
+
+public record StockTransactionView(
+        String id,
+        String transactionType,
+        String date,
+        String symbol,
+        String name,
+        String market,
+        String currency,
+        Double quantity,
+        Double pricePerUnit,
+        Double feeNetUsd,
+        Double feeNetThb,
+        Double fxActualRate,
+        Double fxDimeRate,
+        Double usdActual,
+        Double bahtActual,
+        Double totalUsd,
+        Double totalBahtDime,
+        Double netPricePerShare,
+        Double realizedPnl,
+        Double realizedPnlPct,
+        Double unitsEntitled,
+        Double dividendPerShare,
+        Double grossDividend,
+        Double withholdingTaxRate,
+        Double withholdingTaxAmount,
+        Double netDividend
+) {
+}
