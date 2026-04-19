@@ -10,6 +10,7 @@ const tabs = [
   { label: "Banks", path: "/banks" },
   { label: "Government Lottery", path: "/lottery" },
   { label: "Options", path: "/options" },
+  { label: "YFinance Lab", path: "/market-data-lab" },
 ];
 
 export function TabNavigation() {

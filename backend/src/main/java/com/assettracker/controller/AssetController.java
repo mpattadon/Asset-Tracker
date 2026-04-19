@@ -9,12 +9,12 @@ import com.assettracker.model.LotteryEntry;
 import com.assettracker.model.StocksData;
 import com.assettracker.model.SummaryData;
 import com.assettracker.service.AssetDataService;
-import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
 
@@ -29,44 +29,52 @@ public class AssetController {
     }
 
     @GetMapping("/summary")
-    public SummaryData summary(@RequestHeader(value = "X-User-Id", required = false) String userId) {
-        return assetDataService.getSummary(userId);
+    public SummaryData summary(HttpServletRequest request,
+                               @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return assetDataService.getSummary(request, userId);
     }
 
     @GetMapping("/stocks")
-    public StocksData.StockMarketData stocks(@RequestHeader(value = "X-User-Id", required = false) String userId,
+    public StocksData.StockMarketData stocks(HttpServletRequest request,
+                                             @RequestHeader(value = "X-User-Id", required = false) String userId,
                                              @RequestParam(defaultValue = "thai") String market) {
-        return assetDataService.getStocks(userId, market);
+        return assetDataService.getStocks(request, userId, market);
     }
 
     @GetMapping("/bonds")
-    public List<BondHolding> bonds(@RequestHeader(value = "X-User-Id", required = false) String userId) {
-        return assetDataService.getBonds(userId);
+    public List<BondHolding> bonds(HttpServletRequest request,
+                                   @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return assetDataService.getBonds(request, userId);
     }
 
     @GetMapping("/gold")
-    public List<GoldPosition> gold(@RequestHeader(value = "X-User-Id", required = false) String userId) {
-        return assetDataService.getGold(userId);
+    public List<GoldPosition> gold(HttpServletRequest request,
+                                   @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return assetDataService.getGold(request, userId);
     }
 
     @GetMapping("/funds")
-    public List<FundHolding> funds(@RequestHeader(value = "X-User-Id", required = false) String userId) {
-        return assetDataService.getFunds(userId);
+    public List<FundHolding> funds(HttpServletRequest request,
+                                   @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return assetDataService.getFunds(request, userId);
     }
 
     @GetMapping("/banks")
-    public BanksData.BankRegionData banks(@RequestHeader(value = "X-User-Id", required = false) String userId,
+    public BanksData.BankRegionData banks(HttpServletRequest request,
+                                          @RequestHeader(value = "X-User-Id", required = false) String userId,
                                           @RequestParam(defaultValue = "thai") String region) {
-        return assetDataService.getBanks(userId, region);
+        return assetDataService.getBanks(request, userId, region);
     }
 
     @GetMapping("/lottery")
-    public List<LotteryEntry> lottery(@RequestHeader(value = "X-User-Id", required = false) String userId) {
-        return assetDataService.getLottery(userId);
+    public List<LotteryEntry> lottery(HttpServletRequest request,
+                                      @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return assetDataService.getLottery(request, userId);
     }
 
     @GetMapping("/expenses")
-    public ExpensesData expenses(@RequestHeader(value = "X-User-Id", required = false) String userId) {
-        return assetDataService.getExpenses(userId);
+    public ExpensesData expenses(HttpServletRequest request,
+                                 @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        return assetDataService.getExpenses(request, userId);
     }
 }

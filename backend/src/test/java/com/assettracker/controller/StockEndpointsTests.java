@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.io.IOException;
 import java.net.URI;
@@ -15,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
 class StockEndpointsTests {
 
     @LocalServerPort
@@ -43,6 +45,16 @@ class StockEndpointsTests {
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("\"market\":\"us\""));
         assertTrue(response.body().contains("\"currency\":\"USD\""));
+    }
+
+    @Test
+    void stockInspectEndpointReturnsDiagnostics() throws IOException, InterruptedException {
+        HttpResponse<String> response = get("/api/stocks/inspect?symbol=AAPL&market=US&period=1mo&interval=1d");
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("\"requestedSymbol\":\"AAPL\""));
+        assertTrue(response.body().contains("\"normalizedSymbol\":\"AAPL\""));
+        assertTrue(response.body().contains("\"history\""));
     }
 
     private HttpResponse<String> get(String path) throws IOException, InterruptedException {

@@ -26,3 +26,22 @@
 .env
 *.env
 backend/.env
+
+# Frontend build/install output
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# Backend build and local runtime output
+backend/target/
+backend/.mvn/repository/
+backend/.mvn-user-home/
+backend/data/
+backend/logs/
+
+# Local databases and transient files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log

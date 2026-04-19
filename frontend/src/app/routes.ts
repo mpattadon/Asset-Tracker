@@ -7,6 +7,7 @@ import { Gold } from "./pages/Gold";
 import { MutualFunds } from "./pages/MutualFunds";
 import { Banks } from "./pages/Banks";
 import { Lottery } from "./pages/Lottery";
+import { MarketDataLab } from "./pages/MarketDataLab";
 import { Options } from "./pages/Options";
 
 export const router = createBrowserRouter([
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: "banks", Component: Banks },
       { path: "lottery", Component: Lottery },
       { path: "options", Component: Options },
+      { path: "market-data-lab", Component: MarketDataLab },
     ],
   },
 ]);

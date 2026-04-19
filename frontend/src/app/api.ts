@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
-const DEV_USER_ID = "user-123";
+const DEV_USER_ID = import.meta.env.VITE_DEV_USER_ID ?? "";
 
 export interface SummaryCard {
   label: string;
@@ -127,13 +127,81 @@ export interface AddHoldingPayload {
   purchasePrice: number;
 }
 
+export interface SyncStatus {
+  providerType: string;
+  providerFileId: string | null;
+  revision: string | null;
+  status: string;
+  lastPullAt: string | null;
+  lastPushAt: string | null;
+  lastError: string | null;
+}
+
+export interface AuthState {
+  setupRequired: boolean;
+  authenticated: boolean;
+  authProvider: string | null;
+  externalUserId: string | null;
+  email: string | null;
+  displayName: string | null;
+  syncStatus: SyncStatus | null;
+}
+
+export interface RegisterLocalPayload {
+  username: string;
+  password: string;
+  email?: string;
+}
+
+export interface LoginLocalPayload {
+  username: string;
+  password: string;
+}
+
+export interface ShareStatus {
+  privateHostRunning: boolean;
+  shareEnabled: boolean;
+  privateUrl: string | null;
+  shareUrl: string | null;
+  frontendAvailable: boolean;
+}
+
+export interface TickerDiagnostics {
+  requestedSymbol: string;
+  normalizedSymbol: string;
+  market: string;
+  name: string;
+  type: string;
+  currency: string;
+  price: number;
+  dayChangePct: number;
+  exchange: string | null;
+  timezone: string | null;
+  previousClose: number | null;
+  openPrice: number | null;
+  dayHigh: number | null;
+  dayLow: number | null;
+  fiftyTwoWeekHigh: number | null;
+  fiftyTwoWeekLow: number | null;
+  volume: number | null;
+  averageVolume: number | null;
+  marketCap: number | null;
+  sector: string | null;
+  industry: string | null;
+  website: string | null;
+  history: Candlestick[];
+}
+
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers ?? {});
+  if (DEV_USER_ID) {
+    headers.set("X-User-Id", DEV_USER_ID);
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     ...options,
-    headers: {
-      "X-User-Id": DEV_USER_ID,
-      ...(options.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -181,4 +249,65 @@ export function addHolding(market: string, payload: AddHoldingPayload) {
     },
     body: JSON.stringify(payload),
   });
+}
+
+export function getAuthBootstrap() {
+  return apiFetch<AuthState>("/api/auth/bootstrap");
+}
+
+export function registerLocal(payload: RegisterLocalPayload) {
+  return apiFetch<AuthState>("/api/auth/register/local", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function loginLocal(payload: LoginLocalPayload) {
+  return apiFetch<AuthState>("/api/auth/login/local", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function logout() {
+  return apiFetch<AuthState>("/api/auth/logout", {
+    method: "POST",
+  });
+}
+
+export function getShareStatus() {
+  return apiFetch<ShareStatus>("/api/app/share/status");
+}
+
+export function startShare() {
+  return apiFetch<ShareStatus>("/api/app/share/start", {
+    method: "POST",
+  });
+}
+
+export function stopShare() {
+  return apiFetch<ShareStatus>("/api/app/share/stop", {
+    method: "POST",
+  });
+}
+
+export function getTickerDiagnostics(
+  symbol: string,
+  market: string,
+  period: string,
+  interval: string,
+) {
+  const params = new URLSearchParams({
+    symbol,
+    market,
+    period,
+    interval,
+  });
+  return apiFetch<TickerDiagnostics>(`/api/stocks/inspect?${params.toString()}`);
 }
