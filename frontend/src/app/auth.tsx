@@ -1,12 +1,17 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import {
   AuthState,
+  checkLocalUsername,
   getAuthBootstrap,
   loginLocal,
   LoginLocalPayload,
   logout,
+  PasswordResetPayload,
   registerLocal,
   RegisterLocalPayload,
+  resetLocalPassword,
+  UsernameLookupPayload,
+  UsernameLookupResponse,
 } from "./api";
 
 interface AuthContextValue {
@@ -15,6 +20,8 @@ interface AuthContextValue {
   error: string;
   register: (payload: RegisterLocalPayload) => Promise<void>;
   login: (payload: LoginLocalPayload) => Promise<void>;
+  checkUsername: (payload: UsernameLookupPayload) => Promise<UsernameLookupResponse>;
+  resetPassword: (payload: PasswordResetPayload) => Promise<void>;
   logoutCurrentUser: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -86,6 +93,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function checkUsername(payload: UsernameLookupPayload) {
+    setError("");
+    return checkLocalUsername(payload);
+  }
+
+  async function resetPassword(payload: PasswordResetPayload) {
+    setLoading(true);
+    setError("");
+    try {
+      await resetLocalPassword(payload);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to reset password.");
+      throw requestError;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const value = useMemo<AuthContextValue>(
     () => ({
       authState,
@@ -93,6 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       register,
       login,
+      checkUsername,
+      resetPassword,
       logoutCurrentUser,
       refresh,
     }),

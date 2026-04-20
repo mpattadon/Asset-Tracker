@@ -1,6 +1,7 @@
 package com.assettracker.service;
 
 import com.assettracker.model.QuoteResult;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -12,10 +13,10 @@ import java.util.Optional;
 public class CompositeQuoteProvider implements QuoteProvider, MarketDataProvider {
 
     private final YfinanceSidecarMarketDataProvider yfinanceSidecarMarketDataProvider;
-    private final StubQuoteProvider stubQuoteProvider;
+    private final ObjectProvider<StubQuoteProvider> stubQuoteProvider;
 
     public CompositeQuoteProvider(YfinanceSidecarMarketDataProvider yfinanceSidecarMarketDataProvider,
-                                  StubQuoteProvider stubQuoteProvider) {
+                                  ObjectProvider<StubQuoteProvider> stubQuoteProvider) {
         this.yfinanceSidecarMarketDataProvider = yfinanceSidecarMarketDataProvider;
         this.stubQuoteProvider = stubQuoteProvider;
     }
@@ -26,7 +27,11 @@ public class CompositeQuoteProvider implements QuoteProvider, MarketDataProvider
         if (sidecarQuote.isPresent()) {
             return sidecarQuote;
         }
-        return stubQuoteProvider.lookup(user, symbol, market);
+        StubQuoteProvider stubProvider = stubQuoteProvider.getIfAvailable();
+        if (stubProvider == null) {
+            return Optional.empty();
+        }
+        return stubProvider.lookup(user, symbol, market);
     }
 
     @Override
@@ -38,7 +43,11 @@ public class CompositeQuoteProvider implements QuoteProvider, MarketDataProvider
         if (!sidecarResults.isEmpty()) {
             return sidecarResults;
         }
-        return stubQuoteProvider.search(user, query, market, types);
+        StubQuoteProvider stubProvider = stubQuoteProvider.getIfAvailable();
+        if (stubProvider == null) {
+            return List.of();
+        }
+        return stubProvider.search(user, query, market, types);
     }
 
     @Override
@@ -57,7 +66,11 @@ public class CompositeQuoteProvider implements QuoteProvider, MarketDataProvider
         if (sidecarInspection.isPresent()) {
             return sidecarInspection;
         }
-        return stubQuoteProvider.inspect(user, symbol, market, period, interval);
+        StubQuoteProvider stubProvider = stubQuoteProvider.getIfAvailable();
+        if (stubProvider == null) {
+            return Optional.empty();
+        }
+        return stubProvider.inspect(user, symbol, market, period, interval);
     }
 
     @Override
@@ -70,6 +83,23 @@ public class CompositeQuoteProvider implements QuoteProvider, MarketDataProvider
         if (!sidecarBars.isEmpty()) {
             return sidecarBars;
         }
-        return stubQuoteProvider.history(user, symbol, market, period, interval);
+        StubQuoteProvider stubProvider = stubQuoteProvider.getIfAvailable();
+        if (stubProvider == null) {
+            return List.of();
+        }
+        return stubProvider.history(user, symbol, market, period, interval);
+    }
+
+    @Override
+    public Optional<Double> fxRate(String baseCurrency, String quoteCurrency) {
+        Optional<Double> sidecarRate = yfinanceSidecarMarketDataProvider.fxRate(baseCurrency, quoteCurrency);
+        if (sidecarRate.isPresent()) {
+            return sidecarRate;
+        }
+        StubQuoteProvider stubProvider = stubQuoteProvider.getIfAvailable();
+        if (stubProvider == null) {
+            return Optional.empty();
+        }
+        return stubProvider.fxRate(baseCurrency, quoteCurrency);
     }
 }

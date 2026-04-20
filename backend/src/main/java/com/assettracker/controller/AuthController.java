@@ -5,6 +5,7 @@ import com.assettracker.service.LocalAuthService;
 import com.assettracker.service.PortfolioMetadataRepository;
 import com.assettracker.service.PortfolioSyncService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -36,12 +37,15 @@ public class AuthController {
 
     @PostMapping("/register/local")
     public AuthStateResponse registerLocal(HttpServletRequest request,
+                                           HttpServletResponse response,
                                            @RequestBody LocalRegisterRequest registerRequest) {
         PortfolioMetadataRepository.UserRecord user = localAuthService.register(
                 request,
+                response,
                 registerRequest.username(),
                 registerRequest.password(),
-                registerRequest.email()
+                registerRequest.email(),
+                Boolean.TRUE.equals(registerRequest.rememberMe())
         );
         portfolioSyncService.ensureSynchronized(user);
         return buildState(Optional.of(user));
@@ -49,20 +53,34 @@ public class AuthController {
 
     @PostMapping("/login/local")
     public AuthStateResponse loginLocal(HttpServletRequest request,
+                                        HttpServletResponse response,
                                         @RequestBody LocalLoginRequest loginRequest) {
         PortfolioMetadataRepository.UserRecord user = localAuthService.login(
                 request,
+                response,
                 loginRequest.username(),
-                loginRequest.password()
+                loginRequest.password(),
+                Boolean.TRUE.equals(loginRequest.rememberMe())
         );
         portfolioSyncService.ensureSynchronized(user);
         return buildState(Optional.of(user));
     }
 
     @PostMapping("/logout")
-    public AuthStateResponse logout(HttpServletRequest request) {
-        currentUserService.clearSession(request);
+    public AuthStateResponse logout(HttpServletRequest request, HttpServletResponse response) {
+        currentUserService.clearSession(request, response);
         return buildState(Optional.empty());
+    }
+
+    @PostMapping("/password-reset/local/check")
+    public UsernameLookupResponse checkUsername(@RequestBody UsernameLookupRequest lookupRequest) {
+        return new UsernameLookupResponse(localAuthService.localUserExists(lookupRequest.username()));
+    }
+
+    @PostMapping("/password-reset/local")
+    public PasswordResetResponse resetLocalPassword(@RequestBody LocalPasswordResetRequest resetRequest) {
+        localAuthService.resetPassword(resetRequest.username(), resetRequest.password());
+        return new PasswordResetResponse(true);
     }
 
     private AuthStateResponse buildState(Optional<PortfolioMetadataRepository.UserRecord> user) {
@@ -90,9 +108,22 @@ public class AuthController {
     public record LocalRegisterRequest(
             @NotBlank String username,
             @Size(min = 8) String password,
-            @Email String email) {
+            @Email String email,
+            Boolean rememberMe) {
     }
 
-    public record LocalLoginRequest(@NotBlank String username, @NotBlank String password) {
+    public record LocalLoginRequest(@NotBlank String username, @NotBlank String password, Boolean rememberMe) {
+    }
+
+    public record UsernameLookupRequest(@NotBlank String username) {
+    }
+
+    public record UsernameLookupResponse(boolean found) {
+    }
+
+    public record LocalPasswordResetRequest(@NotBlank String username, @Size(min = 8) String password) {
+    }
+
+    public record PasswordResetResponse(boolean success) {
     }
 }

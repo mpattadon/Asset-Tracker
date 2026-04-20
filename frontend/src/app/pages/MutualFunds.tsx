@@ -10,10 +10,11 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { ChevronDown, ChevronUp, Plus, TrendingUp, TrendingDown } from "lucide-react";
-import { LineChart, Line, ResponsiveContainer } from "recharts";
+import { TradingViewChart } from "../components/charts/TradingViewChart";
 import { AddPurchaseDialog } from "../components/AddPurchaseDialog";
 import { LogMonthlyDataDialog } from "../components/LogMonthlyDataDialog";
 import { PageContainer, PageHeader, SummaryCard, SummaryGrid, DataCard } from "../components/layout/index";
+import { useAuth } from "../auth";
 
 // Sample data structure
 const fundsData = [
@@ -121,13 +122,26 @@ const fundsData = [
 
 interface FundCardProps {
   fund: any;
+  canEdit: boolean;
 }
 
-function FundCard({ fund }: FundCardProps) {
+function monthLabelToIso(label: string) {
+  const parsed = Date.parse(`01 ${label}`);
+  if (Number.isNaN(parsed)) {
+    return "2026-01-01";
+  }
+  return new Date(parsed).toISOString().slice(0, 10);
+}
+
+function FundCard({ fund, canEdit }: FundCardProps) {
   const [expanded, setExpanded] = useState(false);
   const gainLoss = fund.currentValue - fund.totalInvested;
   const gainLossPercent = (gainLoss / fund.totalInvested) * 100;
   const isPositive = gainLoss >= 0;
+  const chartSeries = fund.chartData.map((entry: { value: number }, index: number) => ({
+    time: monthLabelToIso(fund.monthlyData[index]?.month ?? `Jan ${2026 + index}`),
+    value: entry.value,
+  }));
 
   return (
     <Card className="bg-white border-gray-200 shadow-sm">
@@ -212,17 +226,13 @@ function FundCard({ fund }: FundCardProps) {
 
         {/* Mini Chart */}
         <div className="h-16 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={fund.chartData}>
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke={isPositive ? "#10b981" : "#ef4444"}
-                strokeWidth={2}
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <TradingViewChart
+            height={64}
+            mode="line"
+            lineData={chartSeries}
+            currency="USD"
+            accentColor={isPositive ? "#10b981" : "#ef4444"}
+          />
         </div>
       </div>
 
@@ -231,10 +241,10 @@ function FundCard({ fund }: FundCardProps) {
         <div className="border-t border-gray-200 p-5 bg-gray-50">
           <div className="flex items-center justify-between mb-4">
             <h5 className="text-sm font-medium text-gray-900">Monthly Data</h5>
-            <Button variant="outline" size="sm" className="gap-2">
-              <Plus className="w-4 h-4" />
-              Add Monthly Entry
-            </Button>
+                            <Button variant="outline" size="sm" className="gap-2" disabled={!canEdit}>
+                              <Plus className="w-4 h-4" />
+                              {canEdit ? "Add Monthly Entry" : "Login to Add"}
+                            </Button>
           </div>
           <div className="space-y-2">
             {fund.monthlyData.map((entry: any, index: number) => {
@@ -285,6 +295,7 @@ function FundCard({ fund }: FundCardProps) {
 }
 
 export function MutualFunds() {
+  const { authState } = useAuth();
   const [selectedBank, setSelectedBank] = useState<string>("all");
   const [selectedAccount, setSelectedAccount] = useState<string>("all");
   const [addPurchaseOpen, setAddPurchaseOpen] = useState(false);
@@ -330,13 +341,13 @@ export function MutualFunds() {
         {/* Action Buttons and Filters */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            <Button onClick={() => setAddPurchaseOpen(true)} className="gap-2">
+            <Button onClick={() => setAddPurchaseOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
               <Plus className="w-4 h-4" />
-              Add Purchase
+              {authState?.authenticated ? "Add Purchase" : "Login to Add"}
             </Button>
-            <Button variant="outline" onClick={() => setLogMonthlyOpen(true)} className="gap-2">
+            <Button variant="outline" onClick={() => setLogMonthlyOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
               <Plus className="w-4 h-4" />
-              Log Monthly Data
+              {authState?.authenticated ? "Log Monthly Data" : "Login to Add"}
             </Button>
           </div>
 
@@ -420,7 +431,7 @@ export function MutualFunds() {
               {/* Funds */}
               <div className="space-y-3 ml-4">
                 {account.funds.map((fund, fundIndex) => (
-                  <FundCard key={fundIndex} fund={fund} />
+                  <FundCard key={fundIndex} fund={fund} canEdit={Boolean(authState?.authenticated)} />
                 ))}
               </div>
             </div>

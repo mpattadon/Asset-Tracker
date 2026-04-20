@@ -1,23 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Progress } from "../components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../components/ui/select";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend } from "recharts";
 import { PageContainer, DataCard } from "../components/layout/index";
 import { AllocationItem, getAssetSummary, SummaryCard as SummaryCardType } from "../api";
+import { useAuth } from "../auth";
+import { usePreferences } from "../preferences";
 
-function findCard(cards: SummaryCardType[], label: string, fallback = "THB 0") {
-  return cards.find((card) => card.label === label)?.value ?? fallback;
+function findCard(cards: SummaryCardType[], label: string) {
+  return cards.find((card) => card.label === label) ?? null;
+}
+
+function formatCurrency(currency: string, amount: number | null, maximumFractionDigits = 2) {
+  if (amount == null || Number.isNaN(amount)) {
+    return "Loading...";
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(amount);
 }
 
 export function TotalAssets() {
+  const { authState } = useAuth();
+  const { preferredCurrency, convertFromThb, loadingRate } = usePreferences();
   const [summary, setSummary] = useState<{ cards: SummaryCardType[]; allocation: AllocationItem[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -72,11 +79,16 @@ export function TotalAssets() {
     return Math.min(100, equities + fixedIncome);
   }, [summary]);
 
-  const netWorth = findCard(cards, "Net Worth");
-  const invested = findCard(cards, "Invested");
-  const cash = findCard(cards, "Cash & Savings");
-  const alternatives = findCard(cards, "Alternatives");
-  const netWorthDelta = cards.find((card) => card.label === "Net Worth")?.delta ?? "Live priced";
+  const netWorthCard = findCard(cards, "Net Worth");
+  const investedCard = findCard(cards, "Invested");
+  const cashCard = findCard(cards, "Cash & Savings");
+  const alternativesCard = findCard(cards, "Alternatives");
+  const netWorth = formatCurrency(preferredCurrency, convertFromThb(netWorthCard?.amount ?? 0));
+  const invested = formatCurrency(preferredCurrency, convertFromThb(investedCard?.amount ?? 0));
+  const cash = formatCurrency(preferredCurrency, convertFromThb(cashCard?.amount ?? 0));
+  const alternatives = formatCurrency(preferredCurrency, convertFromThb(alternativesCard?.amount ?? 0));
+  const netWorthDelta = netWorthCard?.delta ?? "Live priced";
+  const showCurrencyLoading = preferredCurrency !== "THB" && loadingRate;
 
   return (
     <PageContainer>
@@ -84,17 +96,14 @@ export function TotalAssets() {
         <div>
           <p className="text-sm text-gray-500">Total Assets</p>
           <p className="text-xs text-gray-400">
-            Backend totals are currently reported in THB.
+            {authState?.authenticated
+              ? `Total Assets are shown in ${preferredCurrency}. Stock portfolios still use each portfolio's own base currency.`
+              : "Browsing as guest. Login to load your saved portfolio and record changes."}
           </p>
         </div>
-        <Select value="THB" disabled>
-          <SelectTrigger className="w-[140px] sm:w-[150px]">
-            <SelectValue placeholder="Currency" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="THB">THB (฿)</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm">
+          Preferred currency: {preferredCurrency}
+        </div>
       </div>
 
       {error ? (
@@ -109,20 +118,14 @@ export function TotalAssets() {
             Your cross-market dashboard
           </h2>
           <p className="text-xs sm:text-sm text-gray-500 mb-6">
-            Track and analyze your investments across multiple asset classes. The homepage
-            summary is now loaded from the backend and reflects live-priced US equities plus
-            stored balances for the other categories.
+            Track and analyze your investments across multiple asset classes. Total Assets converts
+            backend THB totals into your preferred currency using the latest available FX rate from
+            the market-data sidecar.
           </p>
-          <div className="flex flex-wrap gap-2 sm:gap-3">
-            <Button variant="default" size="sm">
-              Overview
-            </Button>
-            <Button variant="outline" size="sm">
-              Allocation
-            </Button>
-            <Button variant="outline" size="sm">
-              Live Pricing
-            </Button>
+          <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            {showCurrencyLoading
+              ? "Refreshing preferred-currency conversion..."
+              : `Showing totals in ${preferredCurrency}.`}
           </div>
         </Card>
 
@@ -161,32 +164,28 @@ export function TotalAssets() {
               Loading allocation...
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={allocationData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={100}
-                  paddingAngle={2}
-                  dataKey="value"
-                >
-                  {allocationData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Legend
-                  verticalAlign="bottom"
-                  height={36}
-                  formatter={(value, entry: { payload?: { value?: number } }) => (
-                    <span className="text-sm text-gray-600">
-                      {value} ({entry.payload?.value ?? 0}%)
-                    </span>
-                  )}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            <div className="space-y-4">
+              {allocationData.map((asset) => (
+                <div key={asset.name} className="space-y-2">
+                  <div className="flex items-center justify-between gap-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="inline-block size-2.5 rounded-full"
+                        style={{ backgroundColor: asset.color }}
+                      />
+                      <span className="text-gray-700">{asset.name}</span>
+                    </div>
+                    <span className="text-gray-900">{asset.value}%</span>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-gray-100">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${asset.value}%`, backgroundColor: asset.color }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </Card>
 
@@ -244,7 +243,9 @@ export function TotalAssets() {
                   <>
                     <div>
                       <p className="text-sm text-gray-500 mb-1">{card.label}</p>
-                      <p className="text-base font-medium text-gray-900">{card.value}</p>
+                      <p className="text-base font-medium text-gray-900">
+                        {formatCurrency(preferredCurrency, convertFromThb(card.amount ?? 0))}
+                      </p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm text-gray-500 mb-1">Status</p>

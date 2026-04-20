@@ -55,10 +55,10 @@ public class PortfolioQueryService {
         double netWorth = equities + fixedIncome + goldValue + cashValue + lotteryValue;
 
         List<SummaryData.SummaryCard> cards = List.of(
-                new SummaryData.SummaryCard("Net Worth", formatCompactThb(netWorth), "SQLite-backed workspace"),
-                new SummaryData.SummaryCard("Invested", formatCompactThb(equities + fixedIncome), "DB projections + live quotes"),
-                new SummaryData.SummaryCard("Cash & Savings", formatCompactThb(cashValue), "SQLite balances"),
-                new SummaryData.SummaryCard("Alternatives", formatCompactThb(goldValue + lotteryValue), "Gold + lottery")
+                new SummaryData.SummaryCard("Net Worth", formatCompactThb(netWorth), "SQLite-backed workspace", netWorth, "THB"),
+                new SummaryData.SummaryCard("Invested", formatCompactThb(equities + fixedIncome), "DB projections + live quotes", equities + fixedIncome, "THB"),
+                new SummaryData.SummaryCard("Cash & Savings", formatCompactThb(cashValue), "SQLite balances", cashValue, "THB"),
+                new SummaryData.SummaryCard("Alternatives", formatCompactThb(goldValue + lotteryValue), "Gold + lottery", goldValue + lotteryValue, "THB")
         );
 
         List<AllocationSlice> slices = List.of(

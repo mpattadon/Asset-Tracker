@@ -16,10 +16,11 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { TrendingUp, TrendingDown, Plus } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { TradingViewChart } from "../components/charts/TradingViewChart";
 import { AddMarketDialog } from "../components/AddMarketDialog";
 import { LogGoldPurchaseDialog } from "../components/LogGoldPurchaseDialog";
 import { PageContainer, PageHeader, SummaryCard, SummaryGrid, DataCard } from "../components/layout/index";
+import { useAuth } from "../auth";
 
 const goldHoldings = [
   {
@@ -57,15 +58,16 @@ const goldHoldings = [
 ];
 
 const priceHistory = [
-  { month: "Jan", price: 2010 },
-  { month: "Feb", price: 2040 },
-  { month: "Mar", price: 2025 },
-  { month: "Apr", price: 2065 },
-  { month: "May", price: 2090 },
-  { month: "Jun", price: 2120 },
+  { time: "2026-01-01", value: 2010 },
+  { time: "2026-02-01", value: 2040 },
+  { time: "2026-03-01", value: 2025 },
+  { time: "2026-04-01", value: 2065 },
+  { time: "2026-05-01", value: 2090 },
+  { time: "2026-06-01", value: 2120 },
 ];
 
 export function Gold() {
+  const { authState } = useAuth();
   const [market, setMarket] = useState("thai");
   const [addMarketOpen, setAddMarketOpen] = useState(false);
   const [logPurchaseOpen, setLogPurchaseOpen] = useState(false);
@@ -94,13 +96,13 @@ export function Gold() {
             <SelectItem value="us">US Market</SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" onClick={() => setAddMarketOpen(true)} className="gap-2">
+        <Button variant="outline" size="sm" onClick={() => setAddMarketOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
           <Plus className="w-4 h-4" />
-          Add Market
+          {authState?.authenticated ? "Add Market" : "Login to Add"}
         </Button>
-        <Button size="sm" onClick={() => setLogPurchaseOpen(true)} className="gap-2">
+        <Button size="sm" onClick={() => setLogPurchaseOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
           <Plus className="w-4 h-4" />
-          Log Purchase
+          {authState?.authenticated ? "Log Purchase" : "Login to Add"}
         </Button>
       </PageHeader>
 
@@ -124,40 +126,13 @@ export function Gold() {
       {/* Gold Price Chart */}
       <DataCard title="Gold Price Trend (per oz)">
         <div className="p-4 sm:p-8">
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={priceHistory}>
-              <XAxis
-                dataKey="month"
-                stroke="#9ca3af"
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                stroke="#9ca3af"
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(value) => `${symbol}${value}`}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "white",
-                  border: "1px solid #e5e7eb",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                }}
-                formatter={(value: number) => [`${symbol}${value}`, "Price"]}
-              />
-              <Line
-                type="monotone"
-                dataKey="price"
-                stroke="#f59e0b"
-                strokeWidth={2}
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <TradingViewChart
+            height={250}
+            mode="line"
+            lineData={priceHistory}
+            currency={market === "thai" ? "THB" : "USD"}
+            accentColor="#f59e0b"
+          />
         </div>
       </DataCard>
 

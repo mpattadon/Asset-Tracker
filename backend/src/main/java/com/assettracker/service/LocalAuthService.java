@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import java.util.Locale;
 
@@ -28,9 +29,11 @@ public class LocalAuthService {
     }
 
     public PortfolioMetadataRepository.UserRecord register(HttpServletRequest request,
+                                                           HttpServletResponse response,
                                                            String username,
                                                            String password,
-                                                           String email) {
+                                                           String email,
+                                                           boolean rememberMe) {
         String normalizedUsername = normalizeUsername(username);
         validateCredentials(password);
         try {
@@ -42,7 +45,7 @@ public class LocalAuthService {
             );
             PortfolioMetadataRepository.UserRecord user = portfolioMetadataRepository.findUserById(localUser.userId())
                     .orElseThrow(() -> new IllegalStateException("Created user not found"));
-            currentUserService.setSessionUser(request, user);
+            currentUserService.setSessionUser(request, response, user, rememberMe);
             return user;
         } catch (DuplicateKeyException exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Username already exists", exception);
@@ -50,8 +53,10 @@ public class LocalAuthService {
     }
 
     public PortfolioMetadataRepository.UserRecord login(HttpServletRequest request,
+                                                        HttpServletResponse response,
                                                         String username,
-                                                        String password) {
+                                                        String password,
+                                                        boolean rememberMe) {
         String normalizedUsername = normalizeUsername(username);
         PortfolioMetadataRepository.LocalUserRecord localUser = portfolioMetadataRepository.findLocalUserByUsername(normalizedUsername)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
@@ -60,8 +65,24 @@ public class LocalAuthService {
         }
         PortfolioMetadataRepository.UserRecord user = portfolioMetadataRepository.findUserById(localUser.userId())
                 .orElseThrow(() -> new IllegalStateException("User not found"));
-        currentUserService.setSessionUser(request, user);
+        currentUserService.setSessionUser(request, response, user, rememberMe);
         return user;
+    }
+
+    public boolean localUserExists(String username) {
+        return portfolioMetadataRepository.localUserExists(normalizeUsername(username));
+    }
+
+    public void resetPassword(String username, String newPassword) {
+        String normalizedUsername = normalizeUsername(username);
+        validateCredentials(newPassword);
+        if (!portfolioMetadataRepository.localUserExists(normalizedUsername)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Username not found");
+        }
+        portfolioMetadataRepository.updateLocalUserPassword(
+                normalizedUsername,
+                passwordEncoder.encode(newPassword)
+        );
     }
 
     private void validateCredentials(String password) {

@@ -15,6 +15,7 @@ import { AddBankAccountDialog } from "../components/AddBankAccountDialog";
 import { AddTransactionBankDialog } from "../components/AddTransactionBankDialog";
 import { AddFixedDepositDialog } from "../components/AddFixedDepositDialog";
 import { PageContainer, PageHeader, SummaryCard, SummaryGrid, DataCard } from "../components/layout/index";
+import { useAuth } from "../auth";
 
 // Sample bank data by country
 const banksByCountry = {
@@ -129,6 +130,7 @@ const banksByCountry = {
 };
 
 export function Banks() {
+  const { authState } = useAuth();
   const [country, setCountry] = useState("thailand");
   const [addCountryOpen, setAddCountryOpen] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
@@ -165,13 +167,13 @@ export function Banks() {
             <SelectItem value="us">United States</SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" onClick={() => setAddCountryOpen(true)} className="gap-2">
+        <Button variant="outline" size="sm" onClick={() => setAddCountryOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
           <Plus className="w-4 h-4" />
-          Add Country
+          {authState?.authenticated ? "Add Country" : "Login to Add"}
         </Button>
-        <Button size="sm" onClick={() => setAddAccountOpen(true)} className="gap-2">
+        <Button size="sm" onClick={() => setAddAccountOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
           <Plus className="w-4 h-4" />
-          Add Account
+          {authState?.authenticated ? "Add Account" : "Login to Add"}
         </Button>
       </PageHeader>
 
@@ -241,9 +243,10 @@ export function Banks() {
                               setAddTransactionOpen(true);
                             }}
                             className="gap-2"
+                            disabled={!authState?.authenticated}
                           >
                             <Plus className="w-3 h-3" />
-                            Add Transaction
+                            {authState?.authenticated ? "Add Transaction" : "Login to Add"}
                           </Button>
                         </div>
                         <div className="space-y-2">
@@ -327,9 +330,9 @@ export function Banks() {
           ))}
         </div>
         <div className="p-4 sm:p-6">
-          <Button size="sm" onClick={() => setAddDepositOpen(true)} className="gap-2">
+          <Button size="sm" onClick={() => setAddDepositOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
             <Plus className="w-4 h-4" />
-            Add Deposit
+            {authState?.authenticated ? "Add Deposit" : "Login to Add"}
           </Button>
         </div>
       </DataCard>

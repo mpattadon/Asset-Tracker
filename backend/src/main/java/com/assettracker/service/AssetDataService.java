@@ -11,7 +11,9 @@ import com.assettracker.model.SummaryData;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class AssetDataService {
@@ -26,7 +28,11 @@ public class AssetDataService {
     }
 
     public SummaryData getSummary(HttpServletRequest request, String userIdHeader) {
-        return portfolioQueryService.getSummary(currentUserService.resolveUser(request, userIdHeader));
+        Optional<PortfolioMetadataRepository.UserRecord> user = currentUserService.resolveOptionalUser(request, userIdHeader);
+        if (user.isEmpty()) {
+            return emptySummary();
+        }
+        return portfolioQueryService.getSummary(user.get());
     }
 
     public StocksData.StockMarketData getStocks(HttpServletRequest request, String userIdHeader, String market) {
@@ -55,5 +61,17 @@ public class AssetDataService {
 
     public ExpensesData getExpenses(HttpServletRequest request, String userIdHeader) {
         return portfolioQueryService.getExpenses(currentUserService.resolveUser(request, userIdHeader));
+    }
+
+    private SummaryData emptySummary() {
+        return new SummaryData(
+                List.of(
+                        new SummaryData.SummaryCard("Net Worth", "THB 0.00", "Login to load your portfolio", 0d, "THB"),
+                        new SummaryData.SummaryCard("Invested", "THB 0.00", "Login to load your portfolio", 0d, "THB"),
+                        new SummaryData.SummaryCard("Cash & Savings", "THB 0.00", "Login to load your portfolio", 0d, "THB"),
+                        new SummaryData.SummaryCard("Alternatives", "THB 0.00", "Login to load your portfolio", 0d, "THB")
+                ),
+                new ArrayList<>()
+        );
     }
 }

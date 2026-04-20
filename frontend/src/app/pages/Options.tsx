@@ -19,6 +19,7 @@ import { Badge } from "../components/ui/badge";
 import { TrendingUp, TrendingDown, Plus } from "lucide-react";
 import { AddMarketDialog } from "../components/AddMarketDialog";
 import { PageContainer, PageHeader, SummaryCard, SummaryGrid, DataCard } from "../components/layout/index";
+import { useAuth } from "../auth";
 
 const optionsContracts = [
   {
@@ -74,6 +75,7 @@ const optionsContracts = [
 ];
 
 export function Options() {
+  const { authState } = useAuth();
   const [market, setMarket] = useState("us");
   const [addMarketOpen, setAddMarketOpen] = useState(false);
 
@@ -100,9 +102,9 @@ export function Options() {
             <SelectItem value="thai">Thai Market</SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" onClick={() => setAddMarketOpen(true)} className="gap-2">
+        <Button variant="outline" size="sm" onClick={() => setAddMarketOpen(true)} className="gap-2" disabled={!authState?.authenticated}>
           <Plus className="w-4 h-4" />
-          Add Market
+          {authState?.authenticated ? "Add Market" : "Login to Add"}
         </Button>
       </PageHeader>
 

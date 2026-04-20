@@ -18,9 +18,13 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
-import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { AddStockDialog } from "../components/AddStockDialog";
+import { AddPortfolioDialog } from "../components/AddPortfolioDialog";
+import { DeletePortfolioDialog } from "../components/DeletePortfolioDialog";
+import { StockSearchPanel } from "../components/stocks/StockSearchPanel";
+import { TradingViewChart } from "../components/charts/TradingViewChart";
+import { useAuth } from "../auth";
 import {
   DataCard,
   PageContainer,
@@ -30,31 +34,25 @@ import {
 } from "../components/layout/index";
 import {
   Candlestick,
-  getStockHoldings,
-  getStockSummary,
-  getStockTransactions,
+  createStockPortfolio,
+  deleteStockPortfolio,
+  getPortfolioStockHoldings,
+  getPortfolioStockSummary,
+  getPortfolioStockTransactions,
+  getStockPortfolios,
   StockLotView,
+  StockPortfolio,
   StockPositionView,
   StockSummary,
   StockTransactionView,
 } from "../api";
 
-type MarketKey = "us" | "thai";
 type TransactionFilter = "all" | "BUY" | "SELL" | "DIVIDEND";
 
-interface MarketSnapshot {
-  summary: StockSummary | null;
-  holdings: StockPositionView[];
-  transactions: StockTransactionView[];
-}
-
-const EMPTY_MARKET: MarketSnapshot = {
-  summary: null,
-  holdings: [],
-  transactions: [],
-};
-
 function symbolForCurrency(currency: string) {
+  if (currency === "MIXED") {
+    return "";
+  }
   return (
     {
       USD: "$",
@@ -67,10 +65,12 @@ function symbolForCurrency(currency: string) {
 }
 
 function formatMoney(currency: string, amount: number, maximumFractionDigits = 2) {
-  return `${symbolForCurrency(currency)}${amount.toLocaleString("en-US", {
+  const formatted = amount.toLocaleString("en-US", {
     minimumFractionDigits: 0,
     maximumFractionDigits,
-  })}`;
+  });
+  const symbol = symbolForCurrency(currency);
+  return symbol ? `${symbol}${formatted}` : formatted;
 }
 
 function formatOptionalMoney(currency: string, amount: number | null, maximumFractionDigits = 2) {
@@ -87,24 +87,9 @@ function formatOptionalNumber(value: number | null, maximumFractionDigits = 4) {
   return value.toLocaleString("en-US", { maximumFractionDigits });
 }
 
-function emptySummary(market: MarketKey): StockSummary {
-  return {
-    market,
-    title: market === "us" ? "US Stock" : "Thai Stock",
-    currency: market === "us" ? "USD" : "THB",
-    totalValue: 0,
-    dayChange: 0,
-    dayChangePct: 0,
-    totalChange: 0,
-    totalChangePct: 0,
-    series: [0, 0, 0, 0, 0, 0],
-    candlesticks: [],
-  };
-}
-
 function buildChartData(series: number[], candlesticks: Candlestick[]) {
   return series.map((value, index) => ({
-    date: candlesticks[index]?.time ?? `P${index + 1}`,
+    time: candlesticks[index]?.time ?? `2026-01-${String(index + 1).padStart(2, "0")}`,
     value,
   }));
 }
@@ -139,68 +124,124 @@ function transactionTypeLabel(transactionType: string) {
   }
 }
 
+function portfolioDisplayName(_portfolio: StockPortfolio, index: number) {
+  return _portfolio.name?.trim() || `Portfolio ${index + 1}`;
+}
+
 export function Stocks() {
-  const [market, setMarket] = useState<MarketKey>("us");
+  const { authState } = useAuth();
+  const [activeTab, setActiveTab] = useState("overview");
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>("all");
   const [sortByDay, setSortByDay] = useState(false);
   const [expandedStock, setExpandedStock] = useState<string | null>(null);
   const [addStockOpen, setAddStockOpen] = useState(false);
-  const [marketState, setMarketState] = useState<Record<MarketKey, MarketSnapshot>>({
-    us: EMPTY_MARKET,
-    thai: EMPTY_MARKET,
-  });
-  const [loadingState, setLoadingState] = useState<Record<MarketKey, boolean>>({
-    us: false,
-    thai: false,
-  });
-  const [marketError, setMarketError] = useState("");
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState("all");
+  const [portfolios, setPortfolios] = useState<StockPortfolio[]>([]);
+  const [summary, setSummary] = useState<StockSummary | null>(null);
+  const [holdings, setHoldings] = useState<StockPositionView[]>([]);
+  const [transactions, setTransactions] = useState<StockTransactionView[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [creatingPortfolio, setCreatingPortfolio] = useState(false);
+  const [deletingPortfolio, setDeletingPortfolio] = useState(false);
+  const [addPortfolioOpen, setAddPortfolioOpen] = useState(false);
+  const [deletePortfolioOpen, setDeletePortfolioOpen] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
-  const loadMarket = useCallback(
-    async (marketKey: MarketKey) => {
-      setLoadingState((current) => ({ ...current, [marketKey]: true }));
-      setMarketError("");
-      try {
-        const [summary, holdings, transactions] = await Promise.all([
-          getStockSummary(marketKey),
-          getStockHoldings(marketKey, sortByDay),
-          getStockTransactions(marketKey),
-        ]);
-        setMarketState((current) => ({
-          ...current,
-          [marketKey]: {
-            summary,
-            holdings,
-            transactions,
-          },
-        }));
-      } catch (requestError) {
-        setMarketError(
-          requestError instanceof Error
-            ? requestError.message
-            : `Unable to load ${marketKey} stock data.`,
-        );
-      } finally {
-        setLoadingState((current) => ({ ...current, [marketKey]: false }));
-      }
-    },
-    [sortByDay],
-  );
+  const loadPortfolios = useCallback(async () => {
+    const next = await getStockPortfolios();
+    setPortfolios(next);
+    return next;
+  }, []);
+
+  const loadCurrent = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const [nextSummary, nextHoldings, nextTransactions] = await Promise.all([
+        getPortfolioStockSummary(selectedPortfolioId),
+        getPortfolioStockHoldings(selectedPortfolioId, sortByDay),
+        getPortfolioStockTransactions(selectedPortfolioId),
+      ]);
+      setSummary(nextSummary);
+      setHoldings(nextHoldings);
+      setTransactions(nextTransactions);
+    } catch (requestError) {
+      setLoadError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to load stock portfolio data.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedPortfolioId, sortByDay]);
 
   useEffect(() => {
-    loadMarket(market);
-  }, [loadMarket, market]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const nextPortfolios = await loadPortfolios();
+        if (cancelled) {
+          return;
+        }
+        if (
+          selectedPortfolioId !== "all" &&
+          !nextPortfolios.some((portfolio) => portfolio.id === selectedPortfolioId)
+        ) {
+          setSelectedPortfolioId("all");
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setLoadError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Unable to load stock portfolios.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPortfolios, selectedPortfolioId]);
+
+  useEffect(() => {
+    loadCurrent();
+  }, [loadCurrent]);
 
   useEffect(() => {
     setTransactionFilter("all");
     setExpandedStock(null);
-  }, [market]);
+  }, [selectedPortfolioId]);
 
-  const currentSnapshot = marketState[market];
-  const loading = loadingState[market];
-  const currentSummary = currentSnapshot.summary ?? emptySummary(market);
-  const currentHoldings = currentSnapshot.holdings;
-  const currentTransactions = currentSnapshot.transactions;
-  const currentCurrency = currentSummary.currency;
+  const selectedPortfolio = useMemo(
+    () => portfolios.find((portfolio) => portfolio.id === selectedPortfolioId) ?? null,
+    [portfolios, selectedPortfolioId],
+  );
+
+  const selectedPortfolioLabel = useMemo(() => {
+    if (!selectedPortfolio) {
+      return "All";
+    }
+    const index = portfolios.findIndex((portfolio) => portfolio.id === selectedPortfolio.id);
+    return portfolioDisplayName(selectedPortfolio, index >= 0 ? index : 0);
+  }, [portfolios, selectedPortfolio]);
+
+  const currentSummary =
+    summary ??
+    ({
+      market: selectedPortfolioId,
+      title: selectedPortfolio ? selectedPortfolioLabel : "All Portfolios",
+      currency: "USD",
+      totalValue: 0,
+      dayChange: 0,
+      dayChangePct: 0,
+      totalChange: 0,
+      totalChangePct: 0,
+      series: [0, 0, 0, 0, 0, 0],
+      candlesticks: [],
+    } satisfies StockSummary);
+  const currentCurrency = currentSummary.currency || "USD";
   const chartData = useMemo(
     () => buildChartData(currentSummary.series ?? [], currentSummary.candlesticks ?? []),
     [currentSummary],
@@ -208,71 +249,137 @@ export function Stocks() {
 
   const filteredTransactions = useMemo(() => {
     if (transactionFilter === "all") {
-      return currentTransactions;
+      return transactions;
     }
-    return currentTransactions.filter(
-      (transaction) => transaction.transactionType === transactionFilter,
-    );
-  }, [currentTransactions, transactionFilter]);
+    return transactions.filter((transaction) => transaction.transactionType === transactionFilter);
+  }, [transactions, transactionFilter]);
 
   const transactionCounts = useMemo(
     () => ({
-      all: currentTransactions.length,
-      BUY: currentTransactions.filter((transaction) => transaction.transactionType === "BUY").length,
-      SELL: currentTransactions.filter((transaction) => transaction.transactionType === "SELL").length,
-      DIVIDEND: currentTransactions.filter((transaction) => transaction.transactionType === "DIVIDEND").length,
+      all: transactions.length,
+      BUY: transactions.filter((transaction) => transaction.transactionType === "BUY").length,
+      SELL: transactions.filter((transaction) => transaction.transactionType === "SELL").length,
+      DIVIDEND: transactions.filter((transaction) => transaction.transactionType === "DIVIDEND").length,
     }),
-    [currentTransactions],
+    [transactions],
   );
 
-  const portfolioValue = currentSummary.totalValue;
-  const totalCost = currentHoldings.reduce(
-    (sum, position) => sum + (position.value - position.totalChange),
-    0,
-  );
-  const totalGainLoss = currentHoldings.reduce((sum, position) => sum + position.totalChange, 0);
-  const totalGainLossPercent = totalCost > 0 ? (totalGainLoss / totalCost) * 100 : 0;
+  const totalCost = holdings.reduce((sum, position) => sum + (position.value - position.totalChange), 0);
+  const totalGainLoss = holdings.reduce((sum, position) => sum + position.totalChange, 0);
   const isPositive = totalGainLoss >= 0;
+  const canRecordTransaction = Boolean(authState?.authenticated) && selectedPortfolioId !== "all";
+  const canCreatePortfolio = Boolean(authState?.authenticated);
+  const canDeletePortfolio = Boolean(authState?.authenticated) && selectedPortfolioId !== "all" && Boolean(selectedPortfolio);
+
+  const handleCreatePortfolio = async (payload: { name: string; currency: string }) => {
+    setCreatingPortfolio(true);
+    setLoadError("");
+    try {
+      const created = await createStockPortfolio(payload);
+      const next = await loadPortfolios();
+      const resolved = next.find((portfolio) => portfolio.id === created.id);
+      setSelectedPortfolioId(resolved?.id ?? created.id);
+      setAddPortfolioOpen(false);
+    } catch (requestError) {
+      setLoadError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to create a new portfolio.",
+      );
+    } finally {
+      setCreatingPortfolio(false);
+    }
+  };
+
+  const handleDeletePortfolio = async () => {
+    if (!selectedPortfolio || selectedPortfolioId === "all") {
+      return;
+    }
+    setDeletingPortfolio(true);
+    setLoadError("");
+    try {
+      await deleteStockPortfolio(selectedPortfolio.id);
+      setDeletePortfolioOpen(false);
+      setSelectedPortfolioId("all");
+      await loadPortfolios();
+    } catch (requestError) {
+      setLoadError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to delete this portfolio.",
+      );
+    } finally {
+      setDeletingPortfolio(false);
+    }
+  };
 
   return (
     <PageContainer>
-      <PageHeader title="Stocks">
-        <Select value={market} onValueChange={(value) => setMarket(value as MarketKey)}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="us">US Market</SelectItem>
-            <SelectItem value="thai">Thai Market</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button variant="outline" size="sm" onClick={() => setSortByDay((current) => !current)}>
-          Sort by day % {sortByDay ? "on" : "off"}
-        </Button>
-        <Button size="sm" onClick={() => setAddStockOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Add Transaction
-        </Button>
-      </PageHeader>
+      <PageHeader title="Stocks" />
 
-      {marketError ? (
-        <Card className="border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {marketError}
+      {!authState?.authenticated ? (
+        <Card className="border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          Search charts and inspect market data while signed out. Login is required before creating portfolios or recording transactions.
         </Card>
       ) : null}
 
-      <Tabs defaultValue="overview" className="space-y-4 sm:space-y-6">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="transactions">Transactions</TabsTrigger>
-          <TabsTrigger value="per-stock">Per Stock</TabsTrigger>
-        </TabsList>
+      {loadError ? (
+        <Card className="border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </Card>
+      ) : null}
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="per-stock">Per Stock</TabsTrigger>
+            <TabsTrigger value="search">Search A Stock</TabsTrigger>
+          </TabsList>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDeletePortfolioOpen(true)}
+              disabled={!canDeletePortfolio || deletingPortfolio}
+            >
+              {deletingPortfolio ? "Deleting..." : "Delete Portfolio"}
+            </Button>
+            <Select value={selectedPortfolioId} onValueChange={setSelectedPortfolioId}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                {portfolios.map((portfolio, index) => (
+                  <SelectItem key={portfolio.id} value={portfolio.id}>
+                    {portfolioDisplayName(portfolio, index)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setAddPortfolioOpen(true)}
+              disabled={creatingPortfolio || !canCreatePortfolio}
+              className="gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              {creatingPortfolio ? "Adding..." : !canCreatePortfolio ? "Login to Add Portfolio" : "Add Portfolio"}
+            </Button>
+          </div>
+        </div>
 
         <TabsContent value="overview" className="space-y-6">
           <SummaryGrid>
             <SummaryCard
               label="Portfolio Value"
-              value={loading ? "Loading..." : formatMoney(currentCurrency, portfolioValue)}
+              value={loading ? "Loading..." : formatMoney(currentCurrency, currentSummary.totalValue)}
             />
             <SummaryCard
               label="Total Cost"
@@ -309,40 +416,34 @@ export function Stocks() {
                 </p>
               ) : null}
             </div>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={chartData}>
-                <XAxis dataKey="date" stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis
-                  stroke="#9ca3af"
-                  fontSize={12}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(value) => formatMoney(currentCurrency, value, 0)}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "white",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                  }}
-                  formatter={(value: number) => [formatMoney(currentCurrency, value), "Value"]}
-                />
-                <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            <TradingViewChart
+              height={250}
+              mode="line"
+              currency={currentCurrency}
+              lineData={chartData}
+            />
           </DataCard>
 
           <DataCard className="border-gray-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-gray-200 p-6">
+            <div className="flex flex-col gap-3 border-b border-gray-200 p-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="text-lg font-normal text-gray-900">Holdings</h3>
                 <p className="text-sm text-gray-500">Open positions derived from FIFO lots.</p>
               </div>
-              <Button size="sm" onClick={() => setAddStockOpen(true)} className="gap-2">
-                <Plus className="h-4 w-4" />
-                Add Transaction
-              </Button>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button variant="outline" size="sm" onClick={() => setSortByDay((current) => !current)}>
+                  Sort by day % {sortByDay ? "on" : "off"}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => setAddStockOpen(true)}
+                  className="gap-2"
+                  disabled={!canRecordTransaction}
+                >
+                  <Plus className="h-4 w-4" />
+                  {authState?.authenticated ? "Add Transaction" : "Login to Add Transaction"}
+                </Button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <Table>
@@ -350,6 +451,7 @@ export function Stocks() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="font-medium text-gray-600">Ticker</TableHead>
                     <TableHead className="font-medium text-gray-600">Company Name</TableHead>
+                    <TableHead className="font-medium text-gray-600">Market</TableHead>
                     <TableHead className="text-right font-medium text-gray-600">Quantity</TableHead>
                     <TableHead className="text-right font-medium text-gray-600">Avg Cost</TableHead>
                     <TableHead className="text-right font-medium text-gray-600">Current Price</TableHead>
@@ -358,31 +460,32 @@ export function Stocks() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {currentHoldings.length ? (
-                    currentHoldings.map((stock) => {
+                  {holdings.length ? (
+                    holdings.map((stock) => {
                       const avgCost = averageCost(stock);
                       const stockPositive = stock.totalChange >= 0;
                       return (
-                        <TableRow key={stock.symbol} className="hover:bg-gray-50">
+                        <TableRow key={`${stock.market}:${stock.symbol}`} className="hover:bg-gray-50">
                           <TableCell className="font-medium text-gray-900">{stock.symbol}</TableCell>
                           <TableCell className="text-gray-600">{stock.name}</TableCell>
+                          <TableCell className="text-gray-600">{stock.market}</TableCell>
                           <TableCell className="text-right text-gray-900">
                             {stock.quantity.toLocaleString("en-US", { maximumFractionDigits: 4 })}
                           </TableCell>
                           <TableCell className="text-right text-gray-900">
-                            {formatMoney(currentCurrency, avgCost)}
+                            {formatMoney(stock.currency, avgCost)}
                           </TableCell>
                           <TableCell className="text-right text-gray-900">
-                            {formatMoney(currentCurrency, stock.price)}
+                            {formatMoney(stock.currency, stock.price)}
                           </TableCell>
                           <TableCell className="text-right text-gray-900">
-                            {formatMoney(currentCurrency, stock.value)}
+                            {formatMoney(stock.currency, stock.value)}
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex flex-col items-end">
                               <span className={`font-medium ${stockPositive ? "text-green-600" : "text-red-600"}`}>
                                 {stockPositive ? "+" : "-"}
-                                {formatMoney(currentCurrency, Math.abs(stock.totalChange))}
+                                {formatMoney(stock.currency, Math.abs(stock.totalChange))}
                               </span>
                               <span className={`text-xs ${stockPositive ? "text-green-600" : "text-red-600"}`}>
                                 ({stockPositive ? "+" : "-"}
@@ -395,7 +498,7 @@ export function Stocks() {
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={7} className="py-10 text-center text-sm text-gray-500">
+                      <TableCell colSpan={8} className="py-10 text-center text-sm text-gray-500">
                         {loading ? "Loading holdings..." : "No holdings recorded yet. Add your first transaction."}
                       </TableCell>
                     </TableRow>
@@ -408,9 +511,9 @@ export function Stocks() {
 
         <TabsContent value="transactions" className="space-y-6">
           <div className="flex justify-end">
-            <Button onClick={() => setAddStockOpen(true)} className="gap-2">
+            <Button onClick={() => setAddStockOpen(true)} className="gap-2" disabled={!canRecordTransaction}>
               <Plus className="h-4 w-4" />
-              Add Transaction
+              {authState?.authenticated ? "Add Transaction" : "Login to Add Transaction"}
             </Button>
           </div>
 
@@ -443,6 +546,7 @@ export function Stocks() {
                       <TableRow className="hover:bg-transparent">
                         <TableHead className="font-medium text-gray-600">Date</TableHead>
                         <TableHead className="font-medium text-gray-600">Ticker</TableHead>
+                        <TableHead className="font-medium text-gray-600">Market</TableHead>
                         <TableHead className="font-medium text-gray-600">Type</TableHead>
                         <TableHead className="text-right font-medium text-gray-600">Units</TableHead>
                         <TableHead className="text-right font-medium text-gray-600">Price / Unit</TableHead>
@@ -462,6 +566,7 @@ export function Stocks() {
                                 <span className="text-xs text-gray-500">{transaction.name}</span>
                               </div>
                             </TableCell>
+                            <TableCell className="text-gray-600">{transaction.market}</TableCell>
                             <TableCell>
                               <Badge variant="outline">{transactionTypeLabel(transaction.transactionType)}</Badge>
                             </TableCell>
@@ -469,18 +574,18 @@ export function Stocks() {
                               {formatOptionalNumber(transactionUnits(transaction))}
                             </TableCell>
                             <TableCell className="text-right text-gray-900">
-                              {formatOptionalMoney(currentCurrency, transactionPrice(transaction))}
+                              {formatOptionalMoney(transaction.currency, transactionPrice(transaction))}
                             </TableCell>
                             <TableCell className="text-right text-gray-900">
                               {formatOptionalMoney("USD", transaction.feeNetUsd, 4)}
                             </TableCell>
                             <TableCell className="text-right text-gray-900">
                               <div className="flex flex-col items-end">
-                                <span>{formatOptionalMoney(currentCurrency, transactionNetAmount(transaction))}</span>
+                                <span>{formatOptionalMoney(transaction.currency, transactionNetAmount(transaction))}</span>
                                 {transaction.transactionType === "DIVIDEND" &&
                                 transaction.withholdingTaxAmount != null ? (
                                   <span className="text-xs text-gray-500">
-                                    WHT {formatOptionalMoney(currentCurrency, transaction.withholdingTaxAmount)}
+                                    WHT {formatOptionalMoney(transaction.currency, transaction.withholdingTaxAmount)}
                                   </span>
                                 ) : null}
                               </div>
@@ -493,7 +598,7 @@ export function Stocks() {
                               {transaction.realizedPnl == null
                                 ? "—"
                                 : `${transaction.realizedPnl >= 0 ? "+" : "-"}${formatMoney(
-                                    currentCurrency,
+                                    transaction.currency,
                                     Math.abs(transaction.realizedPnl),
                                   )}`}
                             </TableCell>
@@ -501,7 +606,7 @@ export function Stocks() {
                         ))
                       ) : (
                         <TableRow>
-                          <TableCell colSpan={8} className="py-10 text-center text-sm text-gray-500">
+                          <TableCell colSpan={9} className="py-10 text-center text-sm text-gray-500">
                             {loading
                               ? "Loading transactions..."
                               : "No transactions recorded for this section yet."}
@@ -527,6 +632,7 @@ export function Stocks() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-12 font-medium text-gray-600"></TableHead>
                     <TableHead className="font-medium text-gray-600">Ticker</TableHead>
+                    <TableHead className="font-medium text-gray-600">Market</TableHead>
                     <TableHead className="text-right font-medium text-gray-600">Total Volume</TableHead>
                     <TableHead className="text-right font-medium text-gray-600">Avg Cost</TableHead>
                     <TableHead className="text-right font-medium text-gray-600">Current Price</TableHead>
@@ -535,15 +641,17 @@ export function Stocks() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {currentHoldings.length ? (
-                    currentHoldings.map((stock) => {
-                      const expanded = expandedStock === stock.symbol;
+                  {holdings.length ? (
+                    holdings.map((stock) => {
+                      const expanded = expandedStock === `${stock.market}:${stock.symbol}`;
                       const avgCost = averageCost(stock);
                       return (
-                        <Fragment key={stock.symbol}>
+                        <Fragment key={`${stock.market}:${stock.symbol}`}>
                           <TableRow
                             className="cursor-pointer hover:bg-gray-50"
-                            onClick={() => setExpandedStock(expanded ? null : stock.symbol)}
+                            onClick={() =>
+                              setExpandedStock(expanded ? null : `${stock.market}:${stock.symbol}`)
+                            }
                           >
                             <TableCell>
                               {expanded ? (
@@ -553,17 +661,18 @@ export function Stocks() {
                               )}
                             </TableCell>
                             <TableCell className="font-medium text-gray-900">{stock.symbol}</TableCell>
+                            <TableCell className="text-gray-600">{stock.market}</TableCell>
                             <TableCell className="text-right text-gray-900">
                               {stock.quantity.toLocaleString("en-US", { maximumFractionDigits: 4 })}
                             </TableCell>
                             <TableCell className="text-right text-gray-900">
-                              {formatMoney(currentCurrency, avgCost)}
+                              {formatMoney(stock.currency, avgCost)}
                             </TableCell>
                             <TableCell className="text-right text-gray-900">
-                              {formatMoney(currentCurrency, stock.price)}
+                              {formatMoney(stock.currency, stock.price)}
                             </TableCell>
                             <TableCell className="text-right text-gray-900">
-                              {formatMoney(currentCurrency, stock.value)}
+                              {formatMoney(stock.currency, stock.value)}
                             </TableCell>
                             <TableCell
                               className={`text-right ${
@@ -571,13 +680,13 @@ export function Stocks() {
                               }`}
                             >
                               {stock.totalChange >= 0 ? "+" : "-"}
-                              {formatMoney(currentCurrency, Math.abs(stock.totalChange))} (
+                              {formatMoney(stock.currency, Math.abs(stock.totalChange))} (
                               {Math.abs(stock.totalChangePct).toFixed(2)}%)
                             </TableCell>
                           </TableRow>
                           {expanded ? (
                             <TableRow>
-                              <TableCell colSpan={7} className="bg-gray-50 p-6">
+                              <TableCell colSpan={8} className="bg-gray-50 p-6">
                                 <h4 className="mb-4 text-sm font-medium text-gray-900">Open Lots</h4>
                                 <div className="space-y-2">
                                   {stock.lots.map((lot: StockLotView) => (
@@ -600,19 +709,19 @@ export function Stocks() {
                                       <div>
                                         <p className="mb-1 text-xs text-gray-500">Cost / Unit</p>
                                         <p className="text-sm text-gray-900">
-                                          {formatMoney(currentCurrency, lot.purchasePrice)}
+                                          {formatMoney(stock.currency, lot.purchasePrice)}
                                         </p>
                                       </div>
                                       <div>
                                         <p className="mb-1 text-xs text-gray-500">Current Price</p>
                                         <p className="text-sm text-gray-900">
-                                          {formatMoney(currentCurrency, lot.currentPrice)}
+                                          {formatMoney(stock.currency, lot.currentPrice)}
                                         </p>
                                       </div>
                                       <div>
                                         <p className="mb-1 text-xs text-gray-500">Current Value</p>
                                         <p className="text-sm text-gray-900">
-                                          {formatMoney(currentCurrency, lot.value)}
+                                          {formatMoney(stock.currency, lot.value)}
                                         </p>
                                       </div>
                                     </div>
@@ -626,7 +735,7 @@ export function Stocks() {
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={7} className="py-10 text-center text-sm text-gray-500">
+                      <TableCell colSpan={8} className="py-10 text-center text-sm text-gray-500">
                         No grouped positions available.
                       </TableCell>
                     </TableRow>
@@ -636,17 +745,38 @@ export function Stocks() {
             </div>
           </DataCard>
         </TabsContent>
+
+        <TabsContent value="search" className="space-y-6">
+          <StockSearchPanel />
+        </TabsContent>
       </Tabs>
 
       <AddStockDialog
-        market={market}
-        holdings={currentHoldings}
+        portfolioId={canRecordTransaction ? selectedPortfolioId : null}
+        portfolioLabel={selectedPortfolioLabel}
+        portfolioCurrency={selectedPortfolio?.currency || currentCurrency || "USD"}
+        holdings={holdings}
+        transactions={transactions}
         open={addStockOpen}
         onOpenChange={setAddStockOpen}
         onCreated={async (symbol) => {
           setExpandedStock(symbol);
-          await loadMarket(market);
+          await loadCurrent();
         }}
+      />
+      <AddPortfolioDialog
+        open={addPortfolioOpen}
+        onOpenChange={setAddPortfolioOpen}
+        onSubmit={handleCreatePortfolio}
+        submitting={creatingPortfolio}
+        error={loadError}
+      />
+      <DeletePortfolioDialog
+        open={deletePortfolioOpen}
+        onOpenChange={setDeletePortfolioOpen}
+        portfolioName={selectedPortfolioLabel}
+        onConfirm={handleDeletePortfolio}
+        deleting={deletingPortfolio}
       />
     </PageContainer>
   );

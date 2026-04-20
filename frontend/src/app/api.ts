@@ -5,6 +5,8 @@ export interface SummaryCard {
   label: string;
   value: string;
   delta: string;
+  amount?: number | null;
+  currency?: string | null;
 }
 
 export interface AllocationItem {
@@ -79,6 +81,18 @@ export interface StockSummary {
   candlesticks: Candlestick[];
 }
 
+export interface StockPortfolio {
+  id: string;
+  name: string;
+  market: string | null;
+  currency: string | null;
+}
+
+export interface CreateStockPortfolioPayload {
+  name: string;
+  currency: string;
+}
+
 export interface StockLotView {
   id: string;
   purchaseDate: string;
@@ -118,6 +132,9 @@ export interface StockTransactionView {
   pricePerUnit: number | null;
   feeNetUsd: number | null;
   feeNetThb: number | null;
+  feeNetLocal: number | null;
+  feeVatLocal: number | null;
+  atsFeeLocal: number | null;
   fxActualRate: number | null;
   fxDimeRate: number | null;
   usdActual: number | null;
@@ -161,13 +178,19 @@ export interface CreateStockTransactionPayload {
   symbol: string;
   name: string;
   market: string;
+  marketLayout?: "US" | "TH";
+  portfolioId?: string | null;
   type: string;
   currency: string;
+  exDate?: string | null;
   transactionDate: string;
   quantity?: number | null;
   pricePerUnit?: number | null;
   feeNetUsd?: number | null;
   feeNetThb?: number | null;
+  feeNetLocal?: number | null;
+  feeVatLocal?: number | null;
+  atsFeeLocal?: number | null;
   fxActualRate?: number | null;
   fxDimeRate?: number | null;
   dividendPerShare?: number | null;
@@ -198,9 +221,24 @@ export interface RegisterLocalPayload {
   username: string;
   password: string;
   email?: string;
+  rememberMe?: boolean;
 }
 
 export interface LoginLocalPayload {
+  username: string;
+  password: string;
+  rememberMe?: boolean;
+}
+
+export interface UsernameLookupPayload {
+  username: string;
+}
+
+export interface UsernameLookupResponse {
+  found: boolean;
+}
+
+export interface PasswordResetPayload {
   username: string;
   password: string;
 }
@@ -213,7 +251,14 @@ export interface ShareStatus {
   frontendAvailable: boolean;
 }
 
-export interface TickerDiagnostics {
+export interface ExchangeRate {
+  baseCurrency: string;
+  quoteCurrency: string;
+  rate: number;
+  inverseRate: number;
+}
+
+export interface StockChartData {
   requestedSymbol: string;
   normalizedSymbol: string;
   market: string;
@@ -236,7 +281,46 @@ export interface TickerDiagnostics {
   sector: string | null;
   industry: string | null;
   website: string | null;
-  history: Candlestick[];
+  longBusinessSummary: string | null;
+  headquarters: string | null;
+  country: string | null;
+  ceo: string | null;
+  fullTimeEmployees: number | null;
+  trailingPe: number | null;
+  dividendYield: number | null;
+  news: {
+    title: string | null;
+    publisher: string | null;
+    link: string | null;
+    publishedAt: string | null;
+    summary: string | null;
+  }[];
+  incomeStatement: {
+    title: string;
+    periods: string[];
+    rows: {
+      label: string;
+      values: (number | null)[];
+    }[];
+  } | null;
+  balanceSheet: {
+    title: string;
+    periods: string[];
+    rows: {
+      label: string;
+      values: (number | null)[];
+    }[];
+  } | null;
+  cashFlow: {
+    title: string;
+    periods: string[];
+    rows: {
+      label: string;
+      values: (number | null)[];
+    }[];
+  } | null;
+  intradayHistory: Candlestick[];
+  dailyHistory: Candlestick[];
 }
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -252,15 +336,44 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed with status ${response.status}`);
+    const contentType = response.headers.get("content-type") ?? "";
+    let message = "";
+
+    if (contentType.includes("application/json")) {
+      const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
+      message = payload?.message || payload?.error || "";
+    } else {
+      message = await response.text();
+    }
+
+    const normalized = message.trim().toLowerCase() === "ticker not found"
+      ? "Ticker Not Found"
+      : message.trim();
+
+    throw new Error(normalized || `Request failed with status ${response.status}`);
   }
 
   if (response.status === 204) {
     return null as T;
   }
 
-  return response.json() as Promise<T>;
+  const contentLength = response.headers.get("content-length");
+  if (contentLength === "0") {
+    return null as T;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    return (text ? (text as T) : null) as T;
+  }
+
+  const body = await response.text();
+  if (!body.trim()) {
+    return null as T;
+  }
+
+  return JSON.parse(body) as T;
 }
 
 export function getAssetSummary() {
@@ -273,6 +386,35 @@ export function getStockSeed(market: string) {
 
 export function getStockSummary(market: string) {
   return apiFetch<StockSummary>(`/api/stocks/markets/${encodeURIComponent(market)}/summary`);
+}
+
+export function getStockPortfolios() {
+  return apiFetch<StockPortfolio[]>("/api/stocks/portfolios");
+}
+
+export function createStockPortfolio(payload: CreateStockPortfolioPayload) {
+  return apiFetch<StockPortfolio>("/api/stocks/portfolios", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteStockPortfolio(portfolioId: string) {
+  return apiFetch<void>(`/api/stocks/portfolios/${encodeURIComponent(portfolioId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function getPortfolioStockSummary(portfolioId?: string) {
+  const params = new URLSearchParams();
+  if (portfolioId && portfolioId !== "all") {
+    params.set("portfolioId", portfolioId);
+  }
+  const query = params.toString();
+  return apiFetch<StockSummary>(`/api/stocks/summary${query ? `?${query}` : ""}`);
 }
 
 export function getStockHoldings(market: string, sortByDay = false) {
@@ -288,10 +430,35 @@ export function getStockTransactions(market: string) {
   );
 }
 
-export function searchStocks(query: string, market: string) {
-  return apiFetch<QuoteResult[]>(
-    `/api/stocks/search?query=${encodeURIComponent(query)}&market=${encodeURIComponent(market)}`,
-  );
+export function getPortfolioStockHoldings(portfolioId?: string, sortByDay = false) {
+  const params = new URLSearchParams();
+  if (portfolioId && portfolioId !== "all") {
+    params.set("portfolioId", portfolioId);
+  }
+  if (sortByDay) {
+    params.set("sort", "dayChangePct");
+  }
+  const query = params.toString();
+  return apiFetch<StockPositionView[]>(`/api/stocks/holdings${query ? `?${query}` : ""}`);
+}
+
+export function getPortfolioStockTransactions(portfolioId?: string) {
+  const params = new URLSearchParams();
+  if (portfolioId && portfolioId !== "all") {
+    params.set("portfolioId", portfolioId);
+  }
+  const query = params.toString();
+  return apiFetch<StockTransactionView[]>(`/api/stocks/transactions${query ? `?${query}` : ""}`);
+}
+
+export function searchStocks(query: string, market?: string) {
+  const params = new URLSearchParams({
+    query,
+  });
+  if (market && market.trim()) {
+    params.set("market", market);
+  }
+  return apiFetch<QuoteResult[]>(`/api/stocks/search?${params.toString()}`);
 }
 
 export function addHolding(market: string, payload: AddHoldingPayload) {
@@ -315,6 +482,19 @@ export function addStockTransaction(market: string, payload: CreateStockTransact
       body: JSON.stringify(payload),
     },
   );
+}
+
+export function addPortfolioStockTransaction(portfolioId: string, payload: CreateStockTransactionPayload) {
+  const params = new URLSearchParams({
+    portfolioId,
+  });
+  return apiFetch<StockTransactionView>(`/api/stocks/transactions?${params.toString()}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getAuthBootstrap() {
@@ -341,6 +521,26 @@ export function loginLocal(payload: LoginLocalPayload) {
   });
 }
 
+export function checkLocalUsername(payload: UsernameLookupPayload) {
+  return apiFetch<UsernameLookupResponse>("/api/auth/password-reset/local/check", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resetLocalPassword(payload: PasswordResetPayload) {
+  return apiFetch<{ success: boolean }>("/api/auth/password-reset/local", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function logout() {
   return apiFetch<AuthState>("/api/auth/logout", {
     method: "POST",
@@ -349,6 +549,11 @@ export function logout() {
 
 export function getShareStatus() {
   return apiFetch<ShareStatus>("/api/app/share/status");
+}
+
+export function getExchangeRate(base: string, quote: string) {
+  const params = new URLSearchParams({ base, quote });
+  return apiFetch<ExchangeRate>(`/api/market/fx?${params.toString()}`);
 }
 
 export function startShare() {
@@ -363,17 +568,10 @@ export function stopShare() {
   });
 }
 
-export function getTickerDiagnostics(
-  symbol: string,
-  market: string,
-  period: string,
-  interval: string,
-) {
+export function getStockChartData(symbol: string, market: string) {
   const params = new URLSearchParams({
     symbol,
     market,
-    period,
-    interval,
   });
-  return apiFetch<TickerDiagnostics>(`/api/stocks/inspect?${params.toString()}`);
+  return apiFetch<StockChartData>(`/api/stocks/chart-data?${params.toString()}`);
 }

@@ -27,22 +27,28 @@ import {
   SelectValue,
 } from "./ui/select";
 import {
-  addStockTransaction,
+  addPortfolioStockTransaction,
   CreateStockTransactionPayload,
   QuoteResult,
   searchStocks,
+  StockTransactionView,
   StockPositionView,
 } from "../api";
+import { usePreferences } from "../preferences";
 
 interface AddStockDialogProps {
-  market: "us" | "thai";
+  portfolioId: string | null;
+  portfolioLabel: string;
+  portfolioCurrency: string;
   holdings: StockPositionView[];
+  transactions: StockTransactionView[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: (symbol: string) => Promise<void> | void;
 }
 
 type TransactionMode = "BUY" | "SELL" | "DIVIDEND";
+type MarketLedgerLayout = "US" | "TH";
 
 function resetDateValue() {
   return new Date().toISOString().slice(0, 10);
@@ -75,10 +81,6 @@ function formatPreviewValue(value: number | null, decimals = 2) {
   });
 }
 
-function labelForMarket(market: "us" | "thai") {
-  return market === "us" ? "US" : "Thai";
-}
-
 function submitLabel(mode: TransactionMode) {
   switch (mode) {
     case "BUY":
@@ -90,13 +92,21 @@ function submitLabel(mode: TransactionMode) {
   }
 }
 
+function detectLedgerLayout(market?: string | null): MarketLedgerLayout {
+  return market?.trim().toLowerCase() === "us" ? "US" : "TH";
+}
+
 export function AddStockDialog({
-  market,
+  portfolioId,
+  portfolioLabel,
+  portfolioCurrency,
   holdings,
+  transactions,
   open,
   onOpenChange,
   onCreated,
 }: AddStockDialogProps) {
+  const { preferredCurrency } = usePreferences();
   const [mode, setMode] = useState<TransactionMode>("BUY");
   const [ticker, setTicker] = useState("");
   const [results, setResults] = useState<QuoteResult[]>([]);
@@ -104,14 +114,19 @@ export function AddStockDialog({
   const [searchResultsExpanded, setSearchResultsExpanded] = useState(true);
   const [selectedHoldingSymbol, setSelectedHoldingSymbol] = useState("");
   const [quantity, setQuantity] = useState(resetNumberValue());
+  const [exDate, setExDate] = useState(resetDateValue());
   const [transactionDate, setTransactionDate] = useState(resetDateValue());
   const [pricePerUnit, setPricePerUnit] = useState(resetNumberValue());
   const [feeNetUsd, setFeeNetUsd] = useState(resetNumberValue());
   const [feeNetThb, setFeeNetThb] = useState(resetNumberValue());
+  const [feeNetLocal, setFeeNetLocal] = useState(resetNumberValue());
+  const [feeVatLocal, setFeeVatLocal] = useState(resetNumberValue());
+  const [atsFeeLocal, setAtsFeeLocal] = useState(resetNumberValue());
   const [fxActualRate, setFxActualRate] = useState(resetNumberValue());
   const [fxDimeRate, setFxDimeRate] = useState(resetNumberValue());
   const [dividendPerShare, setDividendPerShare] = useState(resetNumberValue());
   const [withholdingTaxRate, setWithholdingTaxRate] = useState("0.15");
+  const [marketLayout, setMarketLayout] = useState<MarketLedgerLayout>("US");
   const [searching, setSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -130,12 +145,16 @@ export function AddStockDialog({
   const pricePerUnitNumber = useMemo(() => numberFromInput(pricePerUnit), [pricePerUnit]);
   const feeNetUsdNumber = useMemo(() => numberFromInput(feeNetUsd), [feeNetUsd]);
   const feeNetThbNumber = useMemo(() => numberFromInput(feeNetThb), [feeNetThb]);
+  const feeNetLocalNumber = useMemo(() => numberFromInput(feeNetLocal), [feeNetLocal]);
+  const feeVatLocalNumber = useMemo(() => numberFromInput(feeVatLocal), [feeVatLocal]);
+  const atsFeeLocalNumber = useMemo(() => numberFromInput(atsFeeLocal), [atsFeeLocal]);
   const fxActualRateNumber = useMemo(() => numberFromInput(fxActualRate), [fxActualRate]);
   const fxDimeRateNumber = useMemo(() => numberFromInput(fxDimeRate), [fxDimeRate]);
   const dividendPerShareNumber = useMemo(() => numberFromInput(dividendPerShare), [dividendPerShare]);
   const withholdingTaxRateNumber = useMemo(() => numberFromInput(withholdingTaxRate), [withholdingTaxRate]);
+  const preferredCurrencyLabel = preferredCurrency;
 
-  const tradePreview = useMemo(() => {
+  const usTradePreview = useMemo(() => {
     if (mode === "DIVIDEND") {
       return null;
     }
@@ -161,11 +180,45 @@ export function AddStockDialog({
     quantityNumber,
   ]);
 
+  const thaiTradePreview = useMemo(() => {
+    if (mode === "DIVIDEND") {
+      return null;
+    }
+    const grossLocal = quantityNumber * pricePerUnitNumber;
+    const totalFeesLocal = feeNetLocalNumber + feeVatLocalNumber + atsFeeLocalNumber;
+    const totalLocal = grossLocal + totalFeesLocal;
+    return {
+      grossLocal: roundValue(grossLocal),
+      totalFeesLocal: roundValue(totalFeesLocal),
+      feePct: grossLocal > 0 ? roundValue((totalFeesLocal / grossLocal) * 100, 3) : null,
+      totalLocal: roundValue(totalLocal),
+      netPerShare: quantityNumber > 0 ? roundValue(totalLocal / quantityNumber, 4) : null,
+    };
+  }, [
+    atsFeeLocalNumber,
+    feeNetLocalNumber,
+    feeVatLocalNumber,
+    mode,
+    pricePerUnitNumber,
+    quantityNumber,
+  ]);
+
   const dividendPreview = useMemo(() => {
     if (mode !== "DIVIDEND" || !selectedHolding) {
       return null;
     }
-    const unitsEntitled = selectedHolding.quantity;
+    const unitsEntitled = transactions.reduce((sum, transaction) => {
+      if (transaction.symbol !== selectedHolding.symbol || transaction.date > exDate) {
+        return sum;
+      }
+      if (transaction.transactionType === "BUY") {
+        return sum + (transaction.quantity ?? 0);
+      }
+      if (transaction.transactionType === "SELL") {
+        return sum - (transaction.quantity ?? 0);
+      }
+      return sum;
+    }, 0);
     const grossDividend = unitsEntitled * dividendPerShareNumber;
     const withholdingAmount = grossDividend * withholdingTaxRateNumber;
     return {
@@ -174,7 +227,7 @@ export function AddStockDialog({
       withholdingAmount: roundValue(withholdingAmount),
       netDividend: roundValue(grossDividend - withholdingAmount),
     };
-  }, [dividendPerShareNumber, mode, selectedHolding, withholdingTaxRateNumber]);
+  }, [dividendPerShareNumber, exDate, mode, selectedHolding, transactions, withholdingTaxRateNumber]);
 
   useEffect(() => {
     if (!open) {
@@ -188,14 +241,19 @@ export function AddStockDialog({
     setSearchResultsExpanded(true);
     setSelectedHoldingSymbol("");
     setQuantity(resetNumberValue());
+    setExDate(resetDateValue());
     setTransactionDate(resetDateValue());
     setPricePerUnit(resetNumberValue());
     setFeeNetUsd(resetNumberValue());
     setFeeNetThb(resetNumberValue());
+    setFeeNetLocal(resetNumberValue());
+    setFeeVatLocal(resetNumberValue());
+    setAtsFeeLocal(resetNumberValue());
     setFxActualRate(resetNumberValue());
     setFxDimeRate(resetNumberValue());
     setDividendPerShare(resetNumberValue());
     setWithholdingTaxRate("0.15");
+    setMarketLayout("US");
     setSearching(false);
     setSubmitting(false);
     setError("");
@@ -217,7 +275,7 @@ export function AddStockDialog({
       setSearching(true);
       setError("");
       try {
-        const resolvedResults = await searchStocks(ticker.trim(), market);
+        const resolvedResults = await searchStocks(ticker.trim());
         if (!cancelled) {
           setResults(resolvedResults);
         }
@@ -241,7 +299,7 @@ export function AddStockDialog({
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [market, mode, open, ticker]);
+  }, [mode, open, ticker]);
 
   useEffect(() => {
     setError("");
@@ -252,14 +310,27 @@ export function AddStockDialog({
     setSearchResultsExpanded(true);
     setSelectedHoldingSymbol("");
     setQuantity(resetNumberValue());
+    setExDate(resetDateValue());
     setPricePerUnit(resetNumberValue());
     setFeeNetUsd(resetNumberValue());
     setFeeNetThb(resetNumberValue());
+    setFeeNetLocal(resetNumberValue());
+    setFeeVatLocal(resetNumberValue());
+    setAtsFeeLocal(resetNumberValue());
     setFxActualRate(resetNumberValue());
     setFxDimeRate(resetNumberValue());
     setDividendPerShare(resetNumberValue());
     setWithholdingTaxRate("0.15");
+    setMarketLayout("US");
   }, [mode]);
+
+  useEffect(() => {
+    const instrument = mode === "BUY" ? selectedQuote : selectedHolding;
+    if (!instrument) {
+      return;
+    }
+    setMarketLayout(detectLedgerLayout(instrument.market));
+  }, [mode, selectedHolding, selectedQuote]);
 
   const canSubmit = useMemo(() => {
     if (mode === "BUY") {
@@ -268,8 +339,8 @@ export function AddStockDialog({
     if (mode === "SELL") {
       return Boolean(selectedHolding && quantity && transactionDate && pricePerUnit);
     }
-    return Boolean(selectedHolding && transactionDate && dividendPerShare);
-  }, [dividendPerShare, mode, pricePerUnit, quantity, selectedHolding, selectedQuote, transactionDate]);
+    return Boolean(selectedHolding && exDate && transactionDate && dividendPerShare);
+  }, [dividendPerShare, exDate, mode, pricePerUnit, quantity, selectedHolding, selectedQuote, transactionDate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -286,16 +357,29 @@ export function AddStockDialog({
       transactionType: mode,
       symbol: instrument.symbol,
       name: instrument.name,
-      market,
+      market: instrument.market,
+      marketLayout,
+      portfolioId,
       type: instrument.type,
       currency: instrument.currency,
+      exDate: mode === "DIVIDEND" ? exDate : null,
       transactionDate,
       quantity: mode === "DIVIDEND" ? null : Number(quantity),
       pricePerUnit: mode === "DIVIDEND" ? null : Number(pricePerUnit),
-      feeNetUsd: feeNetUsd ? Number(feeNetUsd) : null,
-      feeNetThb: feeNetThb ? Number(feeNetThb) : null,
-      fxActualRate: fxActualRate ? Number(fxActualRate) : null,
-      fxDimeRate: fxDimeRate ? Number(fxDimeRate) : null,
+      feeNetUsd: marketLayout === "US" && feeNetUsd ? Number(feeNetUsd) : null,
+      feeNetThb:
+        marketLayout === "US"
+          ? feeNetThb
+            ? Number(feeNetThb)
+            : null
+          : thaiTradePreview
+            ? thaiTradePreview.totalFeesLocal
+            : null,
+      feeNetLocal: marketLayout === "TH" && feeNetLocal ? Number(feeNetLocal) : null,
+      feeVatLocal: marketLayout === "TH" && feeVatLocal ? Number(feeVatLocal) : null,
+      atsFeeLocal: marketLayout === "TH" && atsFeeLocal ? Number(atsFeeLocal) : null,
+      fxActualRate: marketLayout === "US" && fxActualRate ? Number(fxActualRate) : null,
+      fxDimeRate: marketLayout === "US" && fxDimeRate ? Number(fxDimeRate) : null,
       dividendPerShare: mode === "DIVIDEND" ? Number(dividendPerShare) : null,
       withholdingTaxRate: mode === "DIVIDEND" ? Number(withholdingTaxRate || "0") : null,
     };
@@ -303,7 +387,10 @@ export function AddStockDialog({
     setSubmitting(true);
     setError("");
     try {
-      await addStockTransaction(market, payload);
+      if (!portfolioId) {
+        throw new Error("Select a portfolio first.");
+      }
+      await addPortfolioStockTransaction(portfolioId, payload);
       await onCreated?.(instrument.symbol);
       onOpenChange(false);
     } catch (requestError) {
@@ -320,10 +407,10 @@ export function AddStockDialog({
       <DialogContent className="w-[min(1600px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-hidden p-0 sm:max-w-[1600px]">
         <div className="max-h-[calc(100vh-2rem)] overflow-y-auto p-6">
         <DialogHeader>
-          <DialogTitle>Record {labelForMarket(market)} Stock Transaction</DialogTitle>
+          <DialogTitle>Record Stock Transaction</DialogTitle>
           <DialogDescription>
-            Record buys, sells, and dividends. The backend calculates FIFO lots, remaining cost basis,
-            realized P/L, and dividend totals from the ledger.
+            Record buys, sells, and dividends in {portfolioLabel}. The backend calculates FIFO lots,
+            remaining cost basis, realized P/L, and dividend totals from the ledger.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -331,7 +418,7 @@ export function AddStockDialog({
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="BUY">Buy</TabsTrigger>
               <TabsTrigger value="SELL">Sell</TabsTrigger>
-              <TabsTrigger value="DIVIDEND">Divs</TabsTrigger>
+              <TabsTrigger value="DIVIDEND">Dividend</TabsTrigger>
             </TabsList>
 
             <TabsContent value="BUY" className="space-y-4">
@@ -339,7 +426,7 @@ export function AddStockDialog({
                 <Label htmlFor="ticker">Ticker Symbol</Label>
                 <Input
                   id="ticker"
-                  placeholder={`Search ${labelForMarket(market)} tickers`}
+                  placeholder="Search tickers"
                   value={ticker}
                   onChange={(e) => {
                     setTicker(e.target.value);
@@ -376,10 +463,12 @@ export function AddStockDialog({
                     {results.length ? (
                       <div className="divide-y divide-border">
                         {results.map((result) => {
-                          const active = selectedQuote?.symbol === result.symbol;
+                          const active =
+                            selectedQuote?.symbol === result.symbol &&
+                            selectedQuote?.market === result.market;
                           return (
                             <button
-                              key={result.symbol}
+                              key={`${result.market}:${result.symbol}`}
                               type="button"
                               className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors ${
                                 active ? "bg-blue-50" : "hover:bg-accent"
@@ -388,6 +477,7 @@ export function AddStockDialog({
                                 setSelectedQuote(result);
                                 setPricePerUnit(String(result.price));
                                 setTicker(result.symbol);
+                                setMarketLayout(detectLedgerLayout(result.market));
                                 setSearchResultsExpanded(false);
                               }}
                             >
@@ -458,7 +548,7 @@ export function AddStockDialog({
                 </Select>
                 {!marketHoldings.length ? (
                   <p className="text-sm text-muted-foreground">
-                    No open holdings are available yet for this market.
+                    No open holdings are available yet for this portfolio.
                   </p>
                 ) : null}
               </div>
@@ -505,6 +595,18 @@ export function AddStockDialog({
           ) : null}
 
           {mode !== "DIVIDEND" ? (
+            <div className="space-y-2">
+              <Label>Ledger Layout</Label>
+              <Tabs value={marketLayout} onValueChange={(value) => setMarketLayout(value as MarketLedgerLayout)}>
+                <TabsList>
+                  <TabsTrigger value="US">Foreign Market</TabsTrigger>
+                  <TabsTrigger value="TH">Local Market</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+          ) : null}
+
+          {mode !== "DIVIDEND" && marketLayout === "US" ? (
             <div className="space-y-3">
               <div className="rounded-lg border border-border">
                 <Table className="min-w-[980px]">
@@ -521,7 +623,7 @@ export function AddStockDialog({
                       </TableHead>
                       <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs text-right">
                         Price / Unit
-                        <div className="text-[10px] font-normal text-muted-foreground">(USD)</div>
+                        <div className="text-[10px] font-normal text-muted-foreground">({portfolioCurrency})</div>
                       </TableHead>
                       <TableHead colSpan={4} className="h-auto border-r border-sky-200 px-3 py-2 text-center text-xs">
                         Fee
@@ -537,12 +639,12 @@ export function AddStockDialog({
                       </TableHead>
                     </TableRow>
                     <TableRow className="bg-sky-100 hover:bg-sky-100">
-                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Net USD</TableHead>
-                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Net THB</TableHead>
-                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">USD Actual</TableHead>
-                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Baht Actual</TableHead>
-                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">USD</TableHead>
-                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Baht Dime</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Net {portfolioCurrency}</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Net {preferredCurrencyLabel}</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">{portfolioCurrency} Actual</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">{preferredCurrencyLabel} Actual</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">{portfolioCurrency}</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">{preferredCurrencyLabel} Dime</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -611,15 +713,16 @@ export function AddStockDialog({
                           onChange={(e) => setFeeNetThb(e.target.value)}
                           placeholder="0.00"
                           className="h-8 min-w-[90px] text-right text-xs"
+                          aria-label={`Net ${preferredCurrencyLabel}`}
                         />
                       </TableCell>
                       <TableCell className="border-r border-border bg-muted/30 text-right">
                         <div className="min-w-[90px] text-sm text-foreground">
-                          {formatPreviewValue(tradePreview?.usdActual ?? null)}
+                          {formatPreviewValue(usTradePreview?.usdActual ?? null)}
                         </div>
                         <div className="mt-2">
                           <Label htmlFor="fx-actual-rate" className="text-[10px] uppercase text-muted-foreground">
-                            FX Actual
+                            FX to {preferredCurrencyLabel} Actual
                           </Label>
                           <Input
                             id="fx-actual-rate"
@@ -634,21 +737,21 @@ export function AddStockDialog({
                       </TableCell>
                       <TableCell className="border-r border-border bg-muted/30 text-right">
                         <div className="min-w-[95px] text-sm text-foreground">
-                          {formatPreviewValue(tradePreview?.bahtActual ?? null)}
+                          {formatPreviewValue(usTradePreview?.bahtActual ?? null)}
                         </div>
                       </TableCell>
                       <TableCell className="border-r border-border bg-muted/30 text-right">
                         <div className="min-w-[68px] text-sm text-foreground">
-                          {tradePreview?.feePct == null ? "—" : `${formatPreviewValue(tradePreview.feePct)}%`}
+                          {usTradePreview?.feePct == null ? "—" : `${formatPreviewValue(usTradePreview.feePct)}%`}
                         </div>
                       </TableCell>
                       <TableCell className="border-r border-border bg-muted/30 text-right">
                         <div className="min-w-[90px] text-sm text-foreground">
-                          {formatPreviewValue(tradePreview?.totalUsd ?? null)}
+                          {formatPreviewValue(usTradePreview?.totalUsd ?? null)}
                         </div>
                         <div className="mt-2">
                           <Label htmlFor="fx-dime-rate" className="text-[10px] uppercase text-muted-foreground">
-                            FX Dime
+                            FX to {preferredCurrencyLabel} Dime
                           </Label>
                           <Input
                             id="fx-dime-rate"
@@ -663,12 +766,12 @@ export function AddStockDialog({
                       </TableCell>
                       <TableCell className="border-r border-border bg-muted/30 text-right">
                         <div className="min-w-[98px] text-sm text-foreground">
-                          {formatPreviewValue(tradePreview?.totalBahtDime ?? null)}
+                          {formatPreviewValue(usTradePreview?.totalBahtDime ?? null)}
                         </div>
                       </TableCell>
                       <TableCell className="bg-muted/30 text-right">
                         <div className="min-w-[90px] text-sm text-foreground">
-                          {formatPreviewValue(tradePreview?.netPerShare ?? null, 4)}
+                          {formatPreviewValue(usTradePreview?.netPerShare ?? null, 4)}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -679,12 +782,148 @@ export function AddStockDialog({
                 The highlighted cells are auto-calculated from the values you enter so you can check the ledger before saving.
               </p>
             </div>
+          ) : mode !== "DIVIDEND" ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border">
+                <Table className="min-w-[900px]">
+                  <TableHeader>
+                    <TableRow className="bg-sky-100 hover:bg-sky-100">
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs">
+                        {mode === "BUY" ? "Buy Date" : "Sell Date"}
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs">
+                        Ticker
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs text-right">
+                        Amount
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs text-right">
+                        Price / Unit
+                      </TableHead>
+                      <TableHead colSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 text-center text-xs">
+                        Fee
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs text-right">
+                        ATS Fee
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs text-right">
+                        %Fee
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto border-r border-sky-200 px-3 py-2 align-bottom text-xs text-right">
+                        Total
+                      </TableHead>
+                      <TableHead rowSpan={2} className="h-auto px-3 py-2 align-bottom text-xs text-right">
+                        Net-B / Share
+                      </TableHead>
+                    </TableRow>
+                    <TableRow className="bg-sky-100 hover:bg-sky-100">
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">Net</TableHead>
+                      <TableHead className="h-auto border-r border-sky-200 px-3 py-2 text-xs text-right">VAT</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow className="align-top">
+                      <TableCell className="border-r border-border">
+                        <Input
+                          type="date"
+                          value={transactionDate}
+                          onChange={(e) => setTransactionDate(e.target.value)}
+                          className="h-8 min-w-[118px] text-xs"
+                          required
+                        />
+                      </TableCell>
+                      <TableCell className="border-r border-border">
+                        <div className="min-w-[120px]">
+                          <div className="text-sm font-medium text-foreground">
+                            {(selectedQuote ?? selectedHolding)?.symbol ?? "Select ticker"}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {(selectedQuote ?? selectedHolding)?.name ?? "Search above"}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="border-r border-border">
+                        <Input
+                          type="number"
+                          step="0.000001"
+                          value={quantity}
+                          onChange={(e) => setQuantity(e.target.value)}
+                          placeholder="0"
+                          className="h-8 min-w-[88px] text-right text-xs"
+                          required
+                        />
+                      </TableCell>
+                      <TableCell className="border-r border-border">
+                        <Input
+                          type="number"
+                          step="0.0001"
+                          value={pricePerUnit}
+                          onChange={(e) => setPricePerUnit(e.target.value)}
+                          placeholder="0.00"
+                          className="h-8 min-w-[96px] text-right text-xs"
+                          required
+                        />
+                      </TableCell>
+                      <TableCell className="border-r border-border">
+                        <Input
+                          type="number"
+                          step="0.0001"
+                          value={feeNetLocal}
+                          onChange={(e) => setFeeNetLocal(e.target.value)}
+                          placeholder="0.00"
+                          className="h-8 min-w-[88px] text-right text-xs"
+                        />
+                      </TableCell>
+                      <TableCell className="border-r border-border">
+                        <Input
+                          type="number"
+                          step="0.0001"
+                          value={feeVatLocal}
+                          onChange={(e) => setFeeVatLocal(e.target.value)}
+                          placeholder="0.00"
+                          className="h-8 min-w-[88px] text-right text-xs"
+                        />
+                      </TableCell>
+                      <TableCell className="border-r border-border">
+                        <Input
+                          type="number"
+                          step="0.0001"
+                          value={atsFeeLocal}
+                          onChange={(e) => setAtsFeeLocal(e.target.value)}
+                          placeholder="0.00"
+                          className="h-8 min-w-[88px] text-right text-xs"
+                        />
+                      </TableCell>
+                      <TableCell className="border-r border-border bg-muted/30 text-right">
+                        <div className="min-w-[72px] text-sm text-foreground">
+                          {thaiTradePreview?.feePct == null ? "—" : `${formatPreviewValue(thaiTradePreview.feePct, 3)}%`}
+                        </div>
+                      </TableCell>
+                      <TableCell className="border-r border-border bg-muted/30 text-right">
+                        <div className="min-w-[98px] text-sm text-foreground">
+                          {formatPreviewValue(thaiTradePreview?.totalLocal ?? null)}
+                        </div>
+                      </TableCell>
+                      <TableCell className="bg-muted/30 text-right">
+                        <div className="min-w-[98px] text-sm text-foreground">
+                          {formatPreviewValue(thaiTradePreview?.netPerShare ?? null, 4)}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Total amount, fee percentage, and net per share are calculated live from the Thai ledger row so you can verify the numbers before saving.
+              </p>
+            </div>
           ) : (
             <div className="space-y-3">
               <div className="rounded-lg border border-border">
                 <Table className="min-w-[760px]">
                   <TableHeader>
                     <TableRow className="bg-sky-100 hover:bg-sky-100">
+                      <TableHead className="border-r border-sky-200 px-3 py-2 text-xs">XD Date</TableHead>
                       <TableHead className="border-r border-sky-200 px-3 py-2 text-xs">Received Date</TableHead>
                       <TableHead className="border-r border-sky-200 px-3 py-2 text-xs">Ticker</TableHead>
                       <TableHead className="border-r border-sky-200 px-3 py-2 text-xs text-right">Units Entitled</TableHead>
@@ -697,6 +936,16 @@ export function AddStockDialog({
                   </TableHeader>
                   <TableBody>
                     <TableRow className="align-top">
+                      <TableCell className="border-r border-border">
+                        <Input
+                          id="ex-date"
+                          type="date"
+                          value={exDate}
+                          onChange={(e) => setExDate(e.target.value)}
+                          className="h-8 min-w-[118px] text-xs"
+                          required
+                        />
+                      </TableCell>
                       <TableCell className="border-r border-border">
                         <Input
                           id="transaction-date"
@@ -766,7 +1015,7 @@ export function AddStockDialog({
                 </Table>
               </div>
               <p className="text-xs text-muted-foreground">
-                Units entitled, gross dividend, withholding, and net dividend are shown live so you can verify the payout before saving.
+                Units entitled are calculated from the holdings open on the XD date, while received date is only used to record when the cash was actually paid.
               </p>
             </div>
           )}

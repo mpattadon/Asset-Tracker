@@ -1,6 +1,7 @@
 package com.assettracker.service;
 
 import com.assettracker.model.QuoteResult;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
@@ -9,6 +10,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Component
+@ConditionalOnProperty(name = "asset-tracker.market-data.provider", havingValue = "stub")
 public class StubQuoteProvider implements QuoteProvider, MarketDataProvider {
 
     private final List<QuoteResult> seeds = Arrays.asList(
@@ -73,6 +75,46 @@ public class StubQuoteProvider implements QuoteProvider, MarketDataProvider {
                 "Technology",
                 "Diagnostics",
                 "https://example.test",
+                "Stub issuer summary",
+                "Cupertino, California, United States",
+                "United States",
+                "Jane Doe",
+                125_000d,
+                34.19,
+                0.0038,
+                List.of(
+                        new NewsItem(
+                                "Example headline",
+                                "Example Publisher",
+                                "https://example.test/news",
+                                "2026-04-19T00:00:00Z",
+                                "Example summary"
+                        )
+                ),
+                new FinancialStatement(
+                        "Income Statement",
+                        List.of("2025-12-31", "2024-12-31"),
+                        List.of(
+                                new FinancialRow("Total Revenue", List.of(120_000_000_000d, 110_000_000_000d)),
+                                new FinancialRow("Net Income", List.of(25_000_000_000d, 22_000_000_000d))
+                        )
+                ),
+                new FinancialStatement(
+                        "Balance Sheet",
+                        List.of("2025-12-31", "2024-12-31"),
+                        List.of(
+                                new FinancialRow("Total Assets", List.of(350_000_000_000d, 330_000_000_000d)),
+                                new FinancialRow("Total Debt", List.of(95_000_000_000d, 100_000_000_000d))
+                        )
+                ),
+                new FinancialStatement(
+                        "Cash Flow",
+                        List.of("2025-12-31", "2024-12-31"),
+                        List.of(
+                                new FinancialRow("Operating Cash Flow", List.of(40_000_000_000d, 36_000_000_000d)),
+                                new FinancialRow("Free Cash Flow", List.of(28_000_000_000d, 24_000_000_000d))
+                        )
+                ),
                 history(user, symbol, market, period, interval)
         ));
     }
@@ -91,6 +133,29 @@ public class StubQuoteProvider implements QuoteProvider, MarketDataProvider {
                 new HistoricalBar("P4", base * 0.98, base, base * 0.97, base * 0.99),
                 new HistoricalBar("P5", base * 0.99, base * 1.01, base * 0.98, base)
         );
+    }
+
+    @Override
+    public Optional<Double> fxRate(String baseCurrency, String quoteCurrency) {
+        if (baseCurrency == null || quoteCurrency == null) {
+            return Optional.empty();
+        }
+        if (baseCurrency.equalsIgnoreCase(quoteCurrency)) {
+            return Optional.of(1d);
+        }
+        if ("THB".equalsIgnoreCase(baseCurrency) && "USD".equalsIgnoreCase(quoteCurrency)) {
+            return Optional.of(0.027d);
+        }
+        if ("USD".equalsIgnoreCase(baseCurrency) && "THB".equalsIgnoreCase(quoteCurrency)) {
+            return Optional.of(36.5d);
+        }
+        if ("THB".equalsIgnoreCase(baseCurrency) && "EUR".equalsIgnoreCase(quoteCurrency)) {
+            return Optional.of(0.025d);
+        }
+        if ("EUR".equalsIgnoreCase(baseCurrency) && "THB".equalsIgnoreCase(quoteCurrency)) {
+            return Optional.of(39.5d);
+        }
+        return Optional.empty();
     }
 
     private boolean matchesMarketAlias(String quoteMarket, String requestedMarket) {

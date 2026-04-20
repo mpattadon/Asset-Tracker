@@ -1,8 +1,10 @@
 package com.assettracker.service;
 
 import com.assettracker.model.AddHoldingRequest;
+import com.assettracker.model.CreateStockPortfolioRequest;
 import com.assettracker.model.QuoteResult;
 import com.assettracker.model.StockLotView;
+import com.assettracker.model.StockPortfolioView;
 import com.assettracker.model.StockPositionView;
 import com.assettracker.model.StockSummary;
 import com.assettracker.model.StockTransactionRequest;
@@ -27,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -49,11 +52,62 @@ public class StockLedgerService {
         this.referenceDataService = referenceDataService;
     }
 
-    public List<StockPositionView> getHoldings(PortfolioMetadataRepository.UserRecord user,
-                                               String market,
-                                               boolean sortByDayChange) {
-        String marketCode = normalizeMarketCode(market);
-        DerivedLedger ledger = deriveLedger(user, marketCode);
+    public List<StockPortfolioView> listPortfolios(PortfolioMetadataRepository.UserRecord user) {
+        return listPortfolioAccounts(user).stream()
+                .map(account -> new StockPortfolioView(
+                        account.id().toString(),
+                        account.name(),
+                        account.marketCode() == null ? null : marketDisplay(account.marketCode()),
+                        account.currency()
+                ))
+                .toList();
+    }
+
+    @Transactional
+    public StockPortfolioView createPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                              CreateStockPortfolioRequest request) {
+        String name = request.name().trim();
+        String currency = request.currency().trim().toUpperCase(Locale.ROOT);
+        UUID institutionId = referenceDataService.upsertInstitution(
+                "Portfolio Workspace",
+                "BROKER",
+                null,
+                currency
+        );
+        UUID accountId = UUID.randomUUID();
+        String externalRef = "stock-portfolio-" + accountId;
+        jdbcTemplate.update("""
+                INSERT INTO accounts
+                    (id, user_id, institution_id, account_name, account_number, asset_category_id, base_currency_id,
+                     market_id, notes, external_ref, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                accountId.toString(),
+                id(user.id()),
+                institutionId.toString(),
+                name,
+                null,
+                referenceDataService.assetCategoryId("STOCK").toString(),
+                referenceDataService.currencyId(currency).toString(),
+                null,
+                "Created from stock portfolio workspace",
+                externalRef,
+                true
+        );
+        return new StockPortfolioView(accountId.toString(), name, null, currency);
+    }
+
+    @Transactional
+    public void deletePortfolio(PortfolioMetadataRepository.UserRecord user, String portfolioId) {
+        PortfolioAccount account = requireConcretePortfolio(user, portfolioId);
+        jdbcTemplate.update("DELETE FROM accounts WHERE id = ? AND user_id = ?", account.id().toString(), id(user.id()));
+    }
+
+    public List<StockPositionView> getHoldingsByPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                                          String portfolioId,
+                                                          boolean sortByDayChange) {
+        PortfolioAccount selectedAccount = requirePortfolioSelection(user, portfolioId);
+        DerivedLedger ledger = deriveLedgerForPortfolio(user, selectedAccount == null ? null : selectedAccount.id(), null);
         List<StockPositionView> positions = new ArrayList<>();
 
         for (InstrumentState state : ledger.instrumentStates.values()) {
@@ -61,7 +115,8 @@ public class StockLedgerService {
                 continue;
             }
 
-            QuoteResult quote = quoteProvider.lookup(user, state.symbol(), marketLabel(marketCode))
+            String marketCode = state.marketCode();
+            QuoteResult quote = quoteProvider.lookup(user, state.symbol(), marketDisplay(marketCode))
                     .orElse(new QuoteResult(
                             state.symbol(),
                             state.name(),
@@ -105,8 +160,236 @@ public class StockLedgerService {
                     state.investedAmount() <= EPSILON ? 0 : (totalChange / state.investedAmount()) * 100d,
                     lots
             ));
+        }
 
-            upsertMarketPrice(state.instrumentId(), state.currency(), quote.price(), quote.dayChangePct());
+        if (sortByDayChange) {
+            return positions.stream()
+                    .sorted(Comparator.comparingDouble(StockPositionView::dayChangePct).reversed())
+                    .toList();
+        }
+        return positions.stream()
+                .sorted(Comparator.comparing(StockPositionView::symbol))
+                .toList();
+    }
+
+    public StockSummary getSummaryByPortfolio(PortfolioMetadataRepository.UserRecord user, String portfolioId) {
+        PortfolioAccount selectedAccount = requirePortfolioSelection(user, portfolioId);
+        List<StockPositionView> positions = getHoldingsByPortfolio(user, portfolioId, false);
+        String currency = summaryCurrency(selectedAccount, positions);
+        double totalValue = positions.stream().mapToDouble(StockPositionView::value).sum();
+        double dayChange = positions.stream().mapToDouble(StockPositionView::dayGain).sum();
+        double totalChange = positions.stream().mapToDouble(StockPositionView::totalChange).sum();
+        double totalCost = positions.stream().mapToDouble(position -> position.value() - position.totalChange()).sum();
+        List<StocksData.Candlestick> candles = buildPortfolioCandles(user, positions);
+        List<Double> series = candles.stream().map(StocksData.Candlestick::close).toList();
+        if (series.isEmpty()) {
+            series = syntheticSeries(totalValue);
+            candles = syntheticCandles(series);
+        }
+        return new StockSummary(
+                selectedAccount == null ? "all" : selectedAccount.id().toString(),
+                selectedAccount == null ? "All Portfolios" : selectedAccount.name(),
+                currency,
+                totalValue,
+                dayChange,
+                totalValue == 0 ? 0 : (dayChange / totalValue) * 100d,
+                totalChange,
+                totalCost == 0 ? 0 : (totalChange / totalCost) * 100d,
+                series,
+                candles
+        );
+    }
+
+    public List<StockTransactionView> getTransactionsByPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                                                 String portfolioId) {
+        PortfolioAccount selectedAccount = requirePortfolioSelection(user, portfolioId);
+        DerivedLedger ledger = deriveLedgerForPortfolio(user, selectedAccount == null ? null : selectedAccount.id(), null);
+        return ledger.transactionViews.stream()
+                .sorted(Comparator.comparing(StockTransactionView::date, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(StockTransactionView::id, Comparator.reverseOrder()))
+                .toList();
+    }
+
+    @Transactional
+    public StockTransactionView addTransactionByPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                                          String portfolioId,
+                                                          StockTransactionRequest request) {
+        PortfolioAccount account = requireConcretePortfolio(user, portfolioId == null ? request.portfolioId() : portfolioId);
+        String marketCode = normalizeMarketCode(request.market());
+        String transactionType = normalizeTransactionType(request.transactionType());
+        validateRequest(transactionType, marketCode, request);
+
+        UUID instrumentId = ensureInstrument(user, marketCode, request);
+        LocalDate transactionDate = request.transactionDate();
+
+        if ("SELL".equals(transactionType)) {
+            double availableUnits = openUnitsOnOrBeforeInPortfolio(user, account.id(), request.symbol(), transactionDate);
+            double quantity = defaultNumber(request.quantity());
+            if (quantity > availableUnits + EPSILON) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Sell quantity exceeds open units for " + request.symbol()
+                );
+            }
+        }
+
+        double unitsEntitled = 0;
+        if ("DIVIDEND".equals(transactionType)) {
+            LocalDate entitlementDate = request.exDate() == null ? transactionDate : request.exDate();
+            unitsEntitled = openUnitsOnOrBeforeInPortfolio(user, account.id(), request.symbol(), entitlementDate);
+            if (unitsEntitled <= EPSILON) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "No open units entitled to dividend for " + request.symbol()
+                );
+            }
+        }
+
+        UUID transactionId = UUID.randomUUID();
+        String currencyId = referenceDataService.currencyId(request.currency()).toString();
+        String transactionTypeId = referenceDataService.transactionTypeId(transactionType).toString();
+        double quantity = defaultNumber(request.quantity());
+        double pricePerUnit = defaultNumber(request.pricePerUnit());
+        double grossAmount = "DIVIDEND".equals(transactionType)
+                ? roundMoney(unitsEntitled * defaultNumber(request.dividendPerShare()))
+                : roundMoney(quantity * pricePerUnit);
+
+        jdbcTemplate.update("""
+                INSERT INTO transactions
+                    (id, user_id, account_id, instrument_id, transaction_type_id, trade_date, settlement_date,
+                     payment_date, ex_date, units, price_per_unit, gross_amount, gross_currency_id,
+                     exchange_rate_to_account, exchange_rate_to_base, notes, source_type, source_ref, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                transactionId.toString(),
+                id(user.id()),
+                account.id().toString(),
+                instrumentId.toString(),
+                transactionTypeId,
+                "DIVIDEND".equals(transactionType) ? null : Date.valueOf(transactionDate),
+                "DIVIDEND".equals(transactionType) ? null : Date.valueOf(transactionDate),
+                "DIVIDEND".equals(transactionType) ? Date.valueOf(transactionDate) : null,
+                "DIVIDEND".equals(transactionType) && request.exDate() != null ? Date.valueOf(request.exDate()) : null,
+                quantityOrNull(transactionType, quantity),
+                numberOrNull(transactionType, pricePerUnit),
+                grossAmount,
+                currencyId,
+                request.fxActualRate(),
+                request.fxDimeRate(),
+                "Recorded from stock ledger",
+                "MANUAL",
+                request.symbol().toUpperCase(Locale.ROOT) + ":" + transactionType + ":" + transactionDate
+        );
+
+        jdbcTemplate.update("""
+                INSERT INTO stock_transaction_details
+                    (transaction_id, fee_net_usd, fee_net_thb, fee_net_local, fee_vat_local, ats_fee_local,
+                     fx_actual_rate, fx_dime_rate, withholding_tax_rate, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                transactionId.toString(),
+                defaultNumber(request.feeNetUsd()),
+                defaultNumber(request.feeNetThb()),
+                defaultNumber(request.feeNetLocal()),
+                defaultNumber(request.feeVatLocal()),
+                defaultNumber(request.atsFeeLocal()),
+                request.fxActualRate(),
+                request.fxDimeRate(),
+                request.withholdingTaxRate()
+        );
+
+        if ("DIVIDEND".equals(transactionType)) {
+            double dividendPerShare = defaultNumber(request.dividendPerShare());
+            double grossDividend = roundMoney(unitsEntitled * dividendPerShare);
+            double withholdingTaxRate = defaultNumber(request.withholdingTaxRate());
+            double withholdingTaxAmount = roundMoney(grossDividend * withholdingTaxRate);
+            double netDividend = roundMoney(grossDividend - withholdingTaxAmount);
+            jdbcTemplate.update("""
+                    INSERT INTO cash_flows
+                        (id, transaction_id, cash_flow_type, gross_amount, gross_currency_id, tax_amount, tax_currency_id,
+                         net_amount, net_currency_id, units_entitled, amount_per_unit, tax_already_deducted, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    UUID.randomUUID().toString(),
+                    transactionId.toString(),
+                    "DIVIDEND",
+                    grossDividend,
+                    currencyId,
+                    withholdingTaxAmount,
+                    currencyId,
+                    netDividend,
+                    currencyId,
+                    unitsEntitled,
+                    dividendPerShare,
+                    withholdingTaxAmount > 0
+            );
+        }
+
+        return getTransactionsByPortfolio(user, account.id().toString()).stream()
+                .filter(view -> view.id().equals(transactionId.toString()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Transaction saved but could not be reloaded"
+                ));
+    }
+
+    public List<StockPositionView> getHoldings(PortfolioMetadataRepository.UserRecord user,
+                                               String market,
+                                               boolean sortByDayChange) {
+        String marketCode = normalizeMarketCode(market);
+        DerivedLedger ledger = deriveLedger(user, marketCode);
+        List<StockPositionView> positions = new ArrayList<>();
+
+        for (InstrumentState state : ledger.instrumentStates.values()) {
+            if (state.openUnits() <= EPSILON) {
+                continue;
+            }
+
+            QuoteResult quote = quoteProvider.lookup(user, state.symbol(), marketDisplay(marketCode))
+                    .orElse(new QuoteResult(
+                            state.symbol(),
+                            state.name(),
+                            marketCode,
+                            state.assetType(),
+                            state.currency(),
+                            state.averageCost(),
+                            0
+                    ));
+
+            double value = quote.price() * state.openUnits();
+            double dayGain = value * (quote.dayChangePct() / 100d);
+            double totalChange = value - state.investedAmount();
+
+            List<StockLotView> lots = state.openLots().stream()
+                    .sorted(Comparator.comparing(OpenLot::date).reversed())
+                    .map(lot -> new StockLotView(
+                            lot.id().toString(),
+                            lot.date().toString(),
+                            roundMoney(lot.costPerUnit()),
+                            roundUnits(lot.remainingUnits()),
+                            quote.price(),
+                            valueForUnits(quote.price(), lot.remainingUnits()) * (quote.dayChangePct() / 100d),
+                            quote.dayChangePct(),
+                            valueForUnits(quote.price(), lot.remainingUnits())
+                    ))
+                    .toList();
+
+            positions.add(new StockPositionView(
+                    state.symbol(),
+                    state.name(),
+                    marketDisplay(marketCode),
+                    state.assetType(),
+                    state.currency(),
+                    quote.price(),
+                    roundUnits(state.openUnits()),
+                    dayGain,
+                    quote.dayChangePct(),
+                    value,
+                    totalChange,
+                    state.investedAmount() <= EPSILON ? 0 : (totalChange / state.investedAmount()) * 100d,
+                    lots
+            ));
         }
 
         if (sortByDayChange) {
@@ -181,7 +464,8 @@ public class StockLedgerService {
 
         double unitsEntitled = 0;
         if ("DIVIDEND".equals(transactionType)) {
-            unitsEntitled = openUnitsOnOrBefore(user, marketCode, request.symbol(), transactionDate);
+            LocalDate entitlementDate = request.exDate() == null ? transactionDate : request.exDate();
+            unitsEntitled = openUnitsOnOrBefore(user, marketCode, request.symbol(), entitlementDate);
             if (unitsEntitled <= EPSILON) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
@@ -214,7 +498,7 @@ public class StockLedgerService {
                 "DIVIDEND".equals(transactionType) ? null : Date.valueOf(transactionDate),
                 "DIVIDEND".equals(transactionType) ? null : Date.valueOf(transactionDate),
                 "DIVIDEND".equals(transactionType) ? Date.valueOf(transactionDate) : null,
-                null,
+                "DIVIDEND".equals(transactionType) && request.exDate() != null ? Date.valueOf(request.exDate()) : null,
                 quantityOrNull(transactionType, quantity),
                 numberOrNull(transactionType, pricePerUnit),
                 grossAmount,
@@ -228,12 +512,16 @@ public class StockLedgerService {
 
         jdbcTemplate.update("""
                 INSERT INTO stock_transaction_details
-                    (transaction_id, fee_net_usd, fee_net_thb, fx_actual_rate, fx_dime_rate, withholding_tax_rate, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    (transaction_id, fee_net_usd, fee_net_thb, fee_net_local, fee_vat_local, ats_fee_local,
+                     fx_actual_rate, fx_dime_rate, withholding_tax_rate, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 transactionId.toString(),
                 defaultNumber(request.feeNetUsd()),
                 defaultNumber(request.feeNetThb()),
+                defaultNumber(request.feeNetLocal()),
+                defaultNumber(request.feeVatLocal()),
+                defaultNumber(request.atsFeeLocal()),
                 request.fxActualRate(),
                 request.fxDimeRate(),
                 request.withholdingTaxRate()
@@ -283,11 +571,17 @@ public class StockLedgerService {
                 request.symbol(),
                 request.name(),
                 request.market(),
+                "US",
+                null,
                 request.type(),
                 request.currency(),
+                null,
                 request.purchaseDate(),
                 request.quantity(),
                 request.purchasePrice(),
+                0d,
+                0d,
+                0d,
                 0d,
                 0d,
                 null,
@@ -323,6 +617,7 @@ public class StockLedgerService {
                     entry.instrumentId(),
                     entry.symbol(),
                     entry.name(),
+                    entry.marketCode(),
                     entry.currency(),
                     entry.assetType()
             ));
@@ -353,6 +648,9 @@ public class StockLedgerService {
                             entry.pricePerUnit(),
                             entry.feeNetUsd(),
                             entry.feeNetThb(),
+                            entry.feeNetLocal(),
+                            entry.feeVatLocal(),
+                            entry.atsFeeLocal(),
                             entry.fxActualRate(),
                             entry.fxDimeRate(),
                             totalUsd,
@@ -389,6 +687,9 @@ public class StockLedgerService {
                             entry.pricePerUnit(),
                             entry.feeNetUsd(),
                             entry.feeNetThb(),
+                            entry.feeNetLocal(),
+                            entry.feeVatLocal(),
+                            entry.atsFeeLocal(),
                             entry.fxActualRate(),
                             entry.fxDimeRate(),
                             grossWithFee(entry),
@@ -429,6 +730,151 @@ public class StockLedgerService {
                             null,
                             null,
                             null,
+                            null,
+                            null,
+                            null,
+                            entry.unitsEntitled(),
+                            entry.dividendPerShare(),
+                            entry.grossDividend(),
+                            entry.withholdingTaxRate(),
+                            entry.withholdingTaxAmount(),
+                            entry.netDividend()
+                    ));
+                }
+                default -> {
+                }
+            }
+        }
+
+        return new DerivedLedger(states, views);
+    }
+
+    private DerivedLedger deriveLedgerForPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                                   UUID accountId,
+                                                   LocalDate throughDateInclusive) {
+        List<LedgerEntry> ledger = loadLedgerByPortfolio(user, accountId);
+        Map<UUID, InstrumentState> states = new LinkedHashMap<>();
+        List<StockTransactionView> views = new ArrayList<>();
+
+        for (LedgerEntry entry : ledger) {
+            if (throughDateInclusive != null && entry.date().isAfter(throughDateInclusive)) {
+                continue;
+            }
+            InstrumentState state = states.computeIfAbsent(entry.instrumentId(), ignored -> new InstrumentState(
+                    entry.instrumentId(),
+                    entry.symbol(),
+                    entry.name(),
+                    entry.marketCode(),
+                    entry.currency(),
+                    entry.assetType()
+            ));
+
+            switch (entry.transactionType()) {
+                case "BUY" -> {
+                    double quantity = defaultNumber(entry.quantity());
+                    if (quantity <= EPSILON) {
+                        continue;
+                    }
+                    double totalUsd = grossWithFee(entry);
+                    double costPerUnit = quantity <= EPSILON ? 0 : totalUsd / quantity;
+                    state.openLots().addLast(new OpenLot(entry.id(), entry.date(), quantity, costPerUnit));
+                    views.add(new StockTransactionView(
+                            entry.id().toString(),
+                            "BUY",
+                            entry.date().toString(),
+                            entry.symbol(),
+                            entry.name(),
+                            marketDisplay(entry.marketCode()),
+                            entry.currency(),
+                            quantity,
+                            entry.pricePerUnit(),
+                            entry.feeNetUsd(),
+                            entry.feeNetThb(),
+                            entry.feeNetLocal(),
+                            entry.feeVatLocal(),
+                            entry.atsFeeLocal(),
+                            entry.fxActualRate(),
+                            entry.fxDimeRate(),
+                            totalUsd,
+                            multiply(totalUsd, entry.fxActualRate()),
+                            totalUsd,
+                            multiply(totalUsd, entry.fxDimeRate()),
+                            quantity <= EPSILON ? null : totalUsd / quantity,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                    ));
+                }
+                case "SELL" -> {
+                    double quantity = defaultNumber(entry.quantity());
+                    if (quantity <= EPSILON) {
+                        continue;
+                    }
+                    SellResult sellResult = consumeLots(state.openLots(), quantity, grossWithFee(entry));
+                    state.realizedPnl += sellResult.realizedPnl();
+                    views.add(new StockTransactionView(
+                            entry.id().toString(),
+                            "SELL",
+                            entry.date().toString(),
+                            entry.symbol(),
+                            entry.name(),
+                            marketDisplay(entry.marketCode()),
+                            entry.currency(),
+                            quantity,
+                            entry.pricePerUnit(),
+                            entry.feeNetUsd(),
+                            entry.feeNetThb(),
+                            entry.feeNetLocal(),
+                            entry.feeVatLocal(),
+                            entry.atsFeeLocal(),
+                            entry.fxActualRate(),
+                            entry.fxDimeRate(),
+                            grossWithFee(entry),
+                            multiply(grossWithFee(entry), entry.fxActualRate()),
+                            grossWithFee(entry),
+                            multiply(grossWithFee(entry), entry.fxDimeRate()),
+                            quantity <= EPSILON ? null : grossWithFee(entry) / quantity,
+                            sellResult.realizedPnl(),
+                            sellResult.costBasis() <= EPSILON ? null : (sellResult.realizedPnl() / sellResult.costBasis()) * 100d,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                    ));
+                }
+                case "DIVIDEND" -> {
+                    state.dividendsReceived += defaultNumber(entry.netDividend());
+                    views.add(new StockTransactionView(
+                            entry.id().toString(),
+                            "DIVIDEND",
+                            entry.date().toString(),
+                            entry.symbol(),
+                            entry.name(),
+                            marketDisplay(entry.marketCode()),
+                            entry.currency(),
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
                             entry.unitsEntitled(),
                             entry.dividendPerShare(),
                             entry.grossDividend(),
@@ -450,6 +896,8 @@ public class StockLedgerService {
                         SELECT t.id, t.account_id, t.instrument_id, t.trade_date, t.payment_date, t.units, t.price_per_unit,
                                t.gross_amount, t.created_at, tt.code AS transaction_type, i.ticker, i.name,
                                c.code AS currency_code, ac.code AS asset_category_code, sd.fee_net_usd, sd.fee_net_thb,
+                               sd.fee_net_local, sd.fee_vat_local, sd.ats_fee_local,
+                               COALESCE(m.code, 'TH') AS market_code,
                                sd.fx_actual_rate, sd.fx_dime_rate, sd.withholding_tax_rate,
                                cf.units_entitled, cf.amount_per_unit, cf.gross_amount AS gross_dividend,
                                cf.tax_amount, cf.net_amount
@@ -476,12 +924,16 @@ public class StockLedgerService {
                         rs.getString("ticker"),
                         rs.getString("name"),
                         assetTypeForCategory(rs.getString("asset_category_code")),
+                        rs.getString("market_code"),
                         rs.getString("currency_code"),
                         nullableDouble(rs, "units"),
                         nullableDouble(rs, "price_per_unit"),
                         nullableDouble(rs, "gross_amount"),
                         nullableDouble(rs, "fee_net_usd"),
                         nullableDouble(rs, "fee_net_thb"),
+                        nullableDouble(rs, "fee_net_local"),
+                        nullableDouble(rs, "fee_vat_local"),
+                        nullableDouble(rs, "ats_fee_local"),
                         nullableDouble(rs, "fx_actual_rate"),
                         nullableDouble(rs, "fx_dime_rate"),
                         nullableDouble(rs, "withholding_tax_rate"),
@@ -494,6 +946,73 @@ public class StockLedgerService {
                 ),
                 id(user.id()),
                 marketCode
+        );
+    }
+
+    private List<LedgerEntry> loadLedgerByPortfolio(PortfolioMetadataRepository.UserRecord user, UUID accountId) {
+        String sql = """
+                        SELECT t.id, t.account_id, t.instrument_id, t.trade_date, t.payment_date, t.units, t.price_per_unit,
+                               t.gross_amount, t.created_at, tt.code AS transaction_type, i.ticker, i.name,
+                               c.code AS currency_code, ac.code AS asset_category_code, sd.fee_net_usd, sd.fee_net_thb,
+                               sd.fee_net_local, sd.fee_vat_local, sd.ats_fee_local,
+                               COALESCE(m.code, 'TH') AS market_code,
+                               sd.fx_actual_rate, sd.fx_dime_rate, sd.withholding_tax_rate,
+                               cf.units_entitled, cf.amount_per_unit, cf.gross_amount AS gross_dividend,
+                               cf.tax_amount, cf.net_amount
+                        FROM transactions t
+                        JOIN accounts a ON a.id = t.account_id
+                        JOIN asset_categories account_category ON account_category.id = a.asset_category_id
+                        JOIN transaction_types tt ON tt.id = t.transaction_type_id
+                        JOIN instruments i ON i.id = t.instrument_id
+                        JOIN asset_categories ac ON ac.id = i.asset_category_id
+                        LEFT JOIN markets m ON m.id = i.market_id
+                        LEFT JOIN currencies c ON c.id = t.gross_currency_id
+                        LEFT JOIN stock_transaction_details sd ON sd.transaction_id = t.id
+                        LEFT JOIN cash_flows cf ON cf.transaction_id = t.id
+                        WHERE t.user_id = ?
+                          AND account_category.code = 'STOCK'
+                          AND ac.code IN ('STOCK', 'MUTUAL_FUND')
+                          AND tt.code IN ('BUY', 'SELL', 'DIVIDEND')
+                        """;
+        List<Object> params = new ArrayList<>();
+        params.add(id(user.id()));
+        if (accountId != null) {
+            sql += " AND t.account_id = ?";
+            params.add(accountId.toString());
+        }
+        sql += " ORDER BY COALESCE(t.trade_date, t.payment_date) ASC, t.created_at ASC, t.id ASC";
+        return jdbcTemplate.query(
+                sql,
+                (rs, rowNum) -> new LedgerEntry(
+                        parseUuid(rs.getString("id")),
+                        parseUuid(rs.getString("account_id")),
+                        parseUuid(rs.getString("instrument_id")),
+                        localDate(rs.getString("trade_date"), rs.getString("payment_date")),
+                        rs.getString("transaction_type"),
+                        rs.getString("ticker"),
+                        rs.getString("name"),
+                        assetTypeForCategory(rs.getString("asset_category_code")),
+                        rs.getString("market_code"),
+                        rs.getString("currency_code"),
+                        nullableDouble(rs, "units"),
+                        nullableDouble(rs, "price_per_unit"),
+                        nullableDouble(rs, "gross_amount"),
+                        nullableDouble(rs, "fee_net_usd"),
+                        nullableDouble(rs, "fee_net_thb"),
+                        nullableDouble(rs, "fee_net_local"),
+                        nullableDouble(rs, "fee_vat_local"),
+                        nullableDouble(rs, "ats_fee_local"),
+                        nullableDouble(rs, "fx_actual_rate"),
+                        nullableDouble(rs, "fx_dime_rate"),
+                        nullableDouble(rs, "withholding_tax_rate"),
+                        nullableDouble(rs, "units_entitled"),
+                        nullableDouble(rs, "amount_per_unit"),
+                        nullableDouble(rs, "gross_dividend"),
+                        nullableDouble(rs, "tax_amount"),
+                        nullableDouble(rs, "net_amount"),
+                        parseInstant(rs.getString("created_at"))
+                ),
+                params.toArray()
         );
     }
 
@@ -524,6 +1043,17 @@ public class StockLedgerService {
                 .sum();
     }
 
+    private double openUnitsOnOrBeforeInPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                                  UUID accountId,
+                                                  String symbol,
+                                                  LocalDate date) {
+        DerivedLedger ledger = deriveLedgerForPortfolio(user, accountId, date);
+        return ledger.instrumentStates.values().stream()
+                .filter(state -> state.symbol().equalsIgnoreCase(symbol))
+                .mapToDouble(InstrumentState::openUnits)
+                .sum();
+    }
+
     private List<StocksData.Candlestick> buildMarketCandles(PortfolioMetadataRepository.UserRecord user,
                                                             String market,
                                                             List<StockPositionView> positions) {
@@ -533,6 +1063,36 @@ public class StockLedgerService {
                     user,
                     position.symbol(),
                     market,
+                    "1mo",
+                    "1d"
+            );
+            for (MarketDataProvider.HistoricalBar bar : bars) {
+                AggregateCandle candle = aggregate.computeIfAbsent(bar.time(), ignored -> new AggregateCandle());
+                candle.open += bar.open() * position.quantity();
+                candle.high += bar.high() * position.quantity();
+                candle.low += bar.low() * position.quantity();
+                candle.close += bar.close() * position.quantity();
+            }
+        }
+        return aggregate.entrySet().stream()
+                .map(entry -> new StocksData.Candlestick(
+                        entry.getKey(),
+                        entry.getValue().open,
+                        entry.getValue().high,
+                        entry.getValue().low,
+                        entry.getValue().close
+                ))
+                .toList();
+    }
+
+    private List<StocksData.Candlestick> buildPortfolioCandles(PortfolioMetadataRepository.UserRecord user,
+                                                               List<StockPositionView> positions) {
+        Map<String, AggregateCandle> aggregate = new LinkedHashMap<>();
+        for (StockPositionView position : positions) {
+            List<MarketDataProvider.HistoricalBar> bars = marketDataProvider.history(
+                    user,
+                    position.symbol(),
+                    position.market(),
                     "1mo",
                     "1d"
             );
@@ -600,6 +1160,62 @@ public class StockLedgerService {
                 true
         );
         return accountId;
+    }
+
+    private List<PortfolioAccount> listPortfolioAccounts(PortfolioMetadataRepository.UserRecord user) {
+        return jdbcTemplate.query("""
+                        SELECT a.id,
+                               a.account_name,
+                               COALESCE(m.code, '') AS market_code,
+                               COALESCE(c.code, '') AS currency_code
+                        FROM accounts a
+                        JOIN asset_categories ac ON ac.id = a.asset_category_id
+                        LEFT JOIN markets m ON m.id = a.market_id
+                        LEFT JOIN currencies c ON c.id = a.base_currency_id
+                        WHERE a.user_id = ?
+                          AND ac.code = 'STOCK'
+                          AND a.is_active = 1
+                        ORDER BY a.created_at ASC, a.id ASC
+                        """,
+                (rs, rowNum) -> new PortfolioAccount(
+                        parseUuid(rs.getString("id")),
+                        rs.getString("account_name"),
+                        blankToNull(rs.getString("market_code")),
+                        blankToNull(rs.getString("currency_code"))
+                ),
+                id(user.id())
+        );
+    }
+
+    private PortfolioAccount requirePortfolioSelection(PortfolioMetadataRepository.UserRecord user, String portfolioId) {
+        if (portfolioId == null || portfolioId.isBlank() || "all".equalsIgnoreCase(portfolioId)) {
+            return null;
+        }
+        return requireConcretePortfolio(user, portfolioId);
+    }
+
+    private PortfolioAccount requireConcretePortfolio(PortfolioMetadataRepository.UserRecord user, String portfolioId) {
+        UUID requestedId = parseUuid(portfolioId);
+        if (requestedId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Select a portfolio first");
+        }
+        return listPortfolioAccounts(user).stream()
+                .filter(account -> Objects.equals(account.id(), requestedId))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Portfolio not found"));
+    }
+
+    private String summaryCurrency(PortfolioAccount selectedAccount, List<StockPositionView> positions) {
+        if (selectedAccount != null && selectedAccount.currency() != null && !selectedAccount.currency().isBlank()) {
+            return selectedAccount.currency();
+        }
+        String distinctCurrency = positions.stream()
+                .map(StockPositionView::currency)
+                .filter(Objects::nonNull)
+                .distinct()
+                .reduce((left, right) -> "__MIXED__")
+                .orElse("USD");
+        return "__MIXED__".equals(distinctCurrency) ? "MIXED" : distinctCurrency;
     }
 
     private UUID ensureInstrument(PortfolioMetadataRepository.UserRecord user,
@@ -672,59 +1288,18 @@ public class StockLedgerService {
                 if (defaultNumber(request.dividendPerShare()) <= EPSILON) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Dividend per share must be greater than zero");
                 }
+                if (request.exDate() == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "XD date is required");
+                }
+                if (request.exDate().isAfter(request.transactionDate())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "XD date must be on or before received date");
+                }
                 double withholding = defaultNumber(request.withholdingTaxRate());
                 if (withholding < 0 || withholding >= 1) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Withholding tax rate must be between 0 and 1");
                 }
             }
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported stock transaction type");
-        }
-    }
-
-    private void upsertMarketPrice(UUID instrumentId, String currencyCode, double price, double dayChangePct) {
-        double open = price / (1 + (dayChangePct / 100d));
-        UUID currencyId = currencyCode == null ? null : referenceDataService.currencyId(currencyCode);
-        int updated = jdbcTemplate.update("""
-                UPDATE market_prices
-                SET open_price = ?,
-                    high_price = ?,
-                    low_price = ?,
-                    close_price = ?,
-                    adjusted_close_price = ?,
-                    currency_id = ?
-                WHERE instrument_id = ?
-                  AND price_date = ?
-                  AND source_name = ?
-                """,
-                open,
-                Math.max(open, price),
-                Math.min(open, price),
-                price,
-                price,
-                id(currencyId),
-                id(instrumentId),
-                Date.valueOf(LocalDate.now()),
-                "live-quote"
-        );
-        if (updated == 0) {
-            jdbcTemplate.update("""
-                    INSERT INTO market_prices
-                        (id, instrument_id, price_date, open_price, high_price, low_price, close_price,
-                         adjusted_close_price, currency_id, volume, source_name, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    UUID.randomUUID().toString(),
-                    id(instrumentId),
-                    Date.valueOf(LocalDate.now()),
-                    open,
-                    Math.max(open, price),
-                    Math.min(open, price),
-                    price,
-                    price,
-                    id(currencyId),
-                    null,
-                    "live-quote"
-            );
         }
     }
 
@@ -744,10 +1319,11 @@ public class StockLedgerService {
 
     private List<StocksData.Candlestick> syntheticCandles(List<Double> series) {
         List<StocksData.Candlestick> candles = new ArrayList<>();
+        LocalDate start = LocalDate.now().minusDays(Math.max(series.size() - 1L, 0L));
         for (int index = 0; index < series.size(); index++) {
             double close = series.get(index);
             candles.add(new StocksData.Candlestick(
-                    "P" + (index + 1),
+                    start.plusDays(index).toString(),
                     close * 0.99,
                     close * 1.01,
                     close * 0.98,
@@ -824,7 +1400,22 @@ public class StockLedgerService {
     }
 
     private double grossWithFee(LedgerEntry entry) {
+        double thaiFeeTotal = totalThaiFees(entry);
+        if (thaiFeeTotal > EPSILON) {
+            return roundMoney(defaultNumber(entry.grossAmount()) + thaiFeeTotal);
+        }
+        if ("TH".equals(entry.marketCode())) {
+            return roundMoney(defaultNumber(entry.grossAmount()) + defaultNumber(entry.feeNetThb()));
+        }
         return roundMoney(defaultNumber(entry.grossAmount()) + defaultNumber(entry.feeNetUsd()));
+    }
+
+    private double totalThaiFees(LedgerEntry entry) {
+        return roundMoney(
+                defaultNumber(entry.feeNetLocal())
+                        + defaultNumber(entry.feeVatLocal())
+                        + defaultNumber(entry.atsFeeLocal())
+        );
     }
 
     private double valueForUnits(double price, double units) {
@@ -918,6 +1509,10 @@ public class StockLedgerService {
         return Math.round(value * 1_000_000d) / 1_000_000d;
     }
 
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
     private record LedgerEntry(
             UUID id,
             UUID accountId,
@@ -927,12 +1522,16 @@ public class StockLedgerService {
             String symbol,
             String name,
             String assetType,
+            String marketCode,
             String currency,
             Double quantity,
             Double pricePerUnit,
             Double grossAmount,
             Double feeNetUsd,
             Double feeNetThb,
+            Double feeNetLocal,
+            Double feeVatLocal,
+            Double atsFeeLocal,
             Double fxActualRate,
             Double fxDimeRate,
             Double withholdingTaxRate,
@@ -955,16 +1554,18 @@ public class StockLedgerService {
         private final UUID instrumentId;
         private final String symbol;
         private final String name;
+        private final String marketCode;
         private final String currency;
         private final String assetType;
         private final Deque<OpenLot> openLots = new ArrayDeque<>();
         private double realizedPnl;
         private double dividendsReceived;
 
-        private InstrumentState(UUID instrumentId, String symbol, String name, String currency, String assetType) {
+        private InstrumentState(UUID instrumentId, String symbol, String name, String marketCode, String currency, String assetType) {
             this.instrumentId = instrumentId;
             this.symbol = symbol;
             this.name = name;
+            this.marketCode = marketCode;
             this.currency = currency;
             this.assetType = assetType;
         }
@@ -979,6 +1580,10 @@ public class StockLedgerService {
 
         private String name() {
             return name;
+        }
+
+        private String marketCode() {
+            return marketCode;
         }
 
         private String currency() {
@@ -1005,6 +1610,14 @@ public class StockLedgerService {
             double units = openUnits();
             return units <= EPSILON ? 0 : investedAmount() / units;
         }
+    }
+
+    private record PortfolioAccount(
+            UUID id,
+            String name,
+            String marketCode,
+            String currency
+    ) {
     }
 
     private static final class OpenLot {

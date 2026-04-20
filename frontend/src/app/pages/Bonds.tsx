@@ -7,7 +7,7 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { TrendingUp, TrendingDown } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { TradingViewChart } from "../components/charts/TradingViewChart";
 import { PageContainer, SummaryCard, SummaryGrid, DataCard } from "../components/layout/index";
 
 const bonds = [
@@ -54,12 +54,12 @@ const bonds = [
 ];
 
 const yieldData = [
-  { month: "Jan", yield: 4.2 },
-  { month: "Feb", yield: 4.1 },
-  { month: "Mar", yield: 4.3 },
-  { month: "Apr", yield: 4.4 },
-  { month: "May", yield: 4.3 },
-  { month: "Jun", yield: 4.5 },
+  { time: "2026-01-01", value: 4.2, color: "#60a5fa" },
+  { time: "2026-02-01", value: 4.1, color: "#60a5fa" },
+  { time: "2026-03-01", value: 4.3, color: "#60a5fa" },
+  { time: "2026-04-01", value: 4.4, color: "#60a5fa" },
+  { time: "2026-05-01", value: 4.3, color: "#60a5fa" },
+  { time: "2026-06-01", value: 4.5, color: "#60a5fa" },
 ];
 
 export function Bonds() {
@@ -89,34 +89,12 @@ export function Bonds() {
       {/* Average Yield Chart */}
       <DataCard title="Average Yield Trend">
         <div className="p-4 sm:p-8">
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={yieldData}>
-              <XAxis
-                dataKey="month"
-                stroke="#9ca3af"
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                stroke="#9ca3af"
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(value) => `${value}%`}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "white",
-                  border: "1px solid #e5e7eb",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                }}
-                formatter={(value: number) => [`${value}%`, "Yield"]}
-              />
-              <Bar dataKey="yield" fill="#3b82f6" radius={[8, 8, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <TradingViewChart
+            height={250}
+            mode="histogram"
+            histogramData={yieldData}
+            valueFormatter={(value) => `${value.toFixed(2)}%`}
+          />
         </div>
       </DataCard>
 

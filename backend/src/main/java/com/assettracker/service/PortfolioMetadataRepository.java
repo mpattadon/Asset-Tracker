@@ -90,6 +90,15 @@ public class PortfolioMetadataRepository {
         return results.stream().findFirst();
     }
 
+    public boolean localUserExists(String username) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM local_users WHERE username = ?",
+                Integer.class,
+                username
+        );
+        return count != null && count > 0;
+    }
+
     public LocalUserRecord createLocalUser(String username,
                                            String email,
                                            String displayName,
@@ -118,6 +127,18 @@ public class PortfolioMetadataRepository {
         }
         return findLocalUserByUsername(username)
                 .orElseThrow(() -> new IllegalStateException("Local user creation failed"));
+    }
+
+    public void updateLocalUserPassword(String username, String passwordHash) {
+        jdbcTemplate.update("""
+                UPDATE local_users
+                SET password_hash = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE username = ?
+                """,
+                passwordHash,
+                username
+        );
     }
 
     public Optional<UserKeyRecord> findUserKey(UUID userId) {
