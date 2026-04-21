@@ -155,6 +155,16 @@ public class StockPortfolioService {
         return updated;
     }
 
+    public void deletePortfolioTransaction(HttpServletRequest request,
+                                           String userIdHeader,
+                                           String transactionId) {
+        stockLedgerService.deleteTransaction(
+                currentUserService.resolveUser(request, userIdHeader),
+                transactionId
+        );
+        invalidateSummaryCache();
+    }
+
     public StockPositionView addHolding(HttpServletRequest request,
                                         String userIdHeader,
                                         String market,

@@ -10,6 +10,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
+import { DeleteDoubleConfirmPanel } from "./DeleteDoubleConfirmPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import {
   Table,
@@ -29,6 +30,7 @@ import {
 import {
   addPortfolioStockTransaction,
   CreateStockTransactionPayload,
+  deleteStockTransaction,
   QuoteResult,
   searchStocks,
   StockTransactionView,
@@ -146,6 +148,7 @@ export function AddStockDialog({
   const [marketLayout, setMarketLayout] = useState<MarketLedgerLayout>("US");
   const [searching, setSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmDeleteStage, setConfirmDeleteStage] = useState<0 | 1 | 2>(0);
   const [error, setError] = useState("");
   const isEditing = Boolean(editingTransaction);
 
@@ -356,6 +359,7 @@ export function AddStockDialog({
     }
     setSearching(false);
     setSubmitting(false);
+    setConfirmDeleteStage(0);
     setError("");
   }, [editingTransaction, open]);
 
@@ -425,6 +429,7 @@ export function AddStockDialog({
     setDividendPerShare(resetNumberValue());
     setWithholdingTaxRate("0.15");
     setMarketLayout("US");
+    setConfirmDeleteStage(0);
   }, [isEditing, mode]);
 
   useEffect(() => {
@@ -506,6 +511,25 @@ export function AddStockDialog({
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!editingTransaction) {
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      await deleteStockTransaction(editingTransaction.id);
+      onOpenChange(false);
+      void onCreated?.(editingTransaction.symbol);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Unable to delete this transaction.",
+      );
+    } finally {
+        setSubmitting(false);
     }
   };
 
@@ -1147,7 +1171,31 @@ export function AddStockDialog({
             </div>
           )}
 
+          {isEditing ? (
+            <DeleteDoubleConfirmPanel
+              stage={confirmDeleteStage}
+              submitting={submitting}
+              firstTitle="Delete this stock transaction permanently?"
+              firstMessage="This removes the ledger row and may affect derived holdings, realized P/L, and dividends."
+              keepLabel="Keep Transaction"
+              onKeep={() => setConfirmDeleteStage(0)}
+              onContinue={() => setConfirmDeleteStage(2)}
+              onBack={() => setConfirmDeleteStage(1)}
+              onDelete={handleDelete}
+            />
+          ) : null}
+
           <div className="flex justify-end gap-3 pt-4">
+            {isEditing ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => setConfirmDeleteStage(1)}
+                disabled={submitting}
+              >
+                Delete Transaction
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

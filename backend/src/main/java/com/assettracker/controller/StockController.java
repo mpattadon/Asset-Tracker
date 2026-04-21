@@ -128,6 +128,14 @@ public class StockController {
         return stockPortfolioService.updatePortfolioTransaction(request, userId, transactionId, transactionRequest);
     }
 
+    @DeleteMapping("/transactions/{transactionId}")
+    public ResponseEntity<Void> deletePortfolioTransaction(HttpServletRequest request,
+                                                           @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                                           @PathVariable String transactionId) {
+        stockPortfolioService.deletePortfolioTransaction(request, userId, transactionId);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/markets/{market}/holdings")
     public StockPositionView addHolding(HttpServletRequest httpRequest,
                                         @RequestHeader(value = "X-User-Id", required = false) String userId,

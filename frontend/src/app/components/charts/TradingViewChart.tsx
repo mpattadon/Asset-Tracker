@@ -55,8 +55,6 @@ interface TradingViewChartProps {
 }
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const MIDNIGHT_WITH_OFFSET_PATTERN = /^\d{4}-\d{2}-\d{2}T00:00(?::00(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
-
 function toBusinessDay(rawDate: string): BusinessDay {
   const [year, month, day] = rawDate.split("-").map(Number);
   return { year, month, day };
@@ -65,9 +63,6 @@ function toBusinessDay(rawDate: string): BusinessDay {
 function toChartTime(rawTime: string): Time {
   if (DATE_ONLY_PATTERN.test(rawTime)) {
     return toBusinessDay(rawTime);
-  }
-  if (MIDNIGHT_WITH_OFFSET_PATTERN.test(rawTime)) {
-    return toBusinessDay(rawTime.slice(0, 10));
   }
   const parsed = Date.parse(rawTime);
   if (Number.isNaN(parsed)) {
@@ -81,6 +76,10 @@ function toChartTime(rawTime: string): Time {
 
 function hasBusinessDay(time: Time): time is BusinessDay {
   return typeof time === "object" && time !== null && "year" in time && "month" in time && "day" in time;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function timeSortKey(time: Time) {
@@ -199,6 +198,53 @@ export function TradingViewChart({
       compareChartTimes(left.chartTime, right.chartTime),
     );
 
+    const sanitizedCandlestickData = effectiveData
+      .filter(
+        (point): point is (typeof effectiveData)[number] & {
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+        } =>
+          "open" in point &&
+          isFiniteNumber(point.open) &&
+          isFiniteNumber(point.high) &&
+          isFiniteNumber(point.low) &&
+          isFiniteNumber(point.close),
+      )
+      .map<CandlestickData<Time>>((point) => {
+        const normalizedHigh = Math.max(point.high, point.open, point.close);
+        const normalizedLow = Math.min(point.low, point.open, point.close);
+        return {
+          time: point.chartTime,
+          open: point.open,
+          high: normalizedHigh,
+          low: normalizedLow,
+          close: point.close,
+        };
+      });
+
+    const sanitizedLineData = effectiveData
+      .filter(
+        (point): point is (typeof effectiveData)[number] & { value: number } =>
+          "value" in point && isFiniteNumber(point.value),
+      )
+      .map<LineData<Time>>((point) => ({
+        time: point.chartTime,
+        value: point.value,
+        color: point.color,
+      }));
+
+    const candlestickLineFallback = effectiveData
+      .filter(
+        (point): point is (typeof effectiveData)[number] & { close: number } =>
+          "close" in point && isFiniteNumber(point.close),
+      )
+      .map<LineData<Time>>((point) => ({
+        time: point.chartTime,
+        value: point.close,
+      }));
+
     let chart: ReturnType<typeof createChart> | null = null;
     let activeSeries: ISeriesApi<"Candlestick" | "Histogram" | "Line", Time> | null = null;
     let resizeObserver: ResizeObserver | null = null;
@@ -283,25 +329,72 @@ export function TradingViewChart({
       });
 
       if (mode === "candlestick") {
-        const nextSeries = chart.addSeries(CandlestickSeries, {
-          upColor: "#16a34a",
-          downColor: "#dc2626",
-          borderVisible: false,
-          wickUpColor: "#16a34a",
-          wickDownColor: "#dc2626",
-          lastValueVisible: false,
-          priceLineVisible: false,
-        });
-        nextSeries.setData(
-          effectiveData.map<CandlestickData<Time>>((point) => ({
-            time: point.chartTime,
-            open: point.open,
-            high: point.high,
-            low: point.low,
-            close: point.close,
-          })),
-        );
-        activeSeries = nextSeries;
+        try {
+          const nextSeries = chart.addSeries(CandlestickSeries, {
+            upColor: "#16a34a",
+            downColor: "#dc2626",
+            borderVisible: false,
+            wickUpColor: "#16a34a",
+            wickDownColor: "#dc2626",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          nextSeries.setData(sanitizedCandlestickData);
+          activeSeries = nextSeries;
+        } catch (candlestickError) {
+          console.warn("TradingViewChart candlestick render failed, retrying as line series", candlestickError);
+          chart.remove();
+          chart = createChart(containerRef.current, {
+            width: containerRef.current.clientWidth,
+            height,
+            layout: {
+              background: { type: ColorType.Solid, color: "transparent" },
+              textColor: "#6b7280",
+              attributionLogo: false,
+            },
+            grid: {
+              vertLines: { color: "#eef2f7" },
+              horzLines: { color: "#eef2f7" },
+            },
+            crosshair: {
+              mode: CrosshairMode.Magnet,
+            },
+            rightPriceScale: {
+              borderColor: "#e5e7eb",
+            },
+            handleScroll: {
+              mouseWheel: true,
+              pressedMouseMove: true,
+              horzTouchDrag: true,
+              vertTouchDrag: true,
+            },
+            handleScale: {
+              axisPressedMouseMove: true,
+              mouseWheel: true,
+              pinch: true,
+            },
+            timeScale: {
+              borderColor: "#e5e7eb",
+              timeVisible: intradaySeries,
+              secondsVisible: false,
+              rightOffset: 6,
+              tickMarkFormatter: (time) => toDisplayDate(time, false),
+            },
+            localization: {
+              priceFormatter,
+              timeFormatter: (time) => toDisplayDate(time, true),
+            },
+          });
+          const fallbackSeries = chart.addSeries(LineSeries, {
+            color: accentColor,
+            lineWidth: 2,
+            pointMarkersVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          fallbackSeries.setData(candlestickLineFallback);
+          activeSeries = fallbackSeries;
+        }
       } else if (mode === "histogram") {
         const nextSeries = chart.addSeries(HistogramSeries, {
           color: accentColor,
@@ -325,13 +418,7 @@ export function TradingViewChart({
           lastValueVisible: false,
           priceLineVisible: false,
         });
-        nextSeries.setData(
-          effectiveData.map<LineData<Time>>((point) => ({
-            time: point.chartTime,
-            value: point.value,
-            color: point.color,
-          })),
-        );
+        nextSeries.setData(sanitizedLineData);
         activeSeries = nextSeries;
       }
 

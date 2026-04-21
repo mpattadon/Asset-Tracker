@@ -98,6 +98,20 @@ function formatOptionalNumber(value: number | null, maximumFractionDigits = 4) {
   return value.toLocaleString("en-US", { maximumFractionDigits });
 }
 
+function formatDisplayDate(value: string | null | undefined) {
+  if (!value) {
+    return "—";
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  const day = String(parsed.getUTCDate()).padStart(2, "0");
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const year = parsed.getUTCFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 function averageCost(position: StockPositionView) {
   const totalCost = position.value - position.totalChange;
   return position.quantity > 0 ? totalCost / position.quantity : 0;
@@ -479,7 +493,7 @@ export function Stocks() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Button
                 type="button"
-                variant="outline"
+                variant="default"
                 size="sm"
                 onClick={() => setDeletePortfolioOpen(true)}
                 disabled={!canDeletePortfolio || deletingPortfolio}
@@ -501,7 +515,7 @@ export function Stocks() {
               </Select>
               <Button
                 type="button"
-                variant="outline"
+                variant="default"
                 size="sm"
                 onClick={() => setAddPortfolioOpen(true)}
                 disabled={creatingPortfolio || !canCreatePortfolio}
@@ -751,7 +765,7 @@ export function Stocks() {
                       {filteredTransactions.length ? (
                         filteredTransactions.map((transaction) => (
                           <TableRow key={transaction.id} className="hover:bg-gray-50">
-                            <TableCell className="text-gray-900">{transaction.date}</TableCell>
+                            <TableCell className="text-gray-900">{formatDisplayDate(transaction.date)}</TableCell>
                             <TableCell className="font-medium text-gray-900">
                               <div className="flex flex-col">
                                 <span>{transaction.symbol}</span>
@@ -895,7 +909,7 @@ export function Stocks() {
                                     >
                                       <div>
                                         <p className="mb-1 text-xs text-gray-500">Purchase Date</p>
-                                        <p className="text-sm text-gray-900">{lot.purchaseDate}</p>
+                                        <p className="text-sm text-gray-900">{formatDisplayDate(lot.purchaseDate)}</p>
                                       </div>
                                       <div>
                                         <p className="mb-1 text-xs text-gray-500">Quantity</p>

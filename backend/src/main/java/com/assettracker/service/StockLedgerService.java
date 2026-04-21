@@ -546,6 +546,20 @@ public class StockLedgerService {
                 ));
     }
 
+    @Transactional
+    public void deleteTransaction(PortfolioMetadataRepository.UserRecord user,
+                                  String transactionId) {
+        LedgerEntry existing = requireExistingTransaction(user, transactionId);
+        ensureDeleteAllowed(user, existing);
+        jdbcTemplate.update("DELETE FROM cash_flows WHERE transaction_id = ?", existing.id().toString());
+        jdbcTemplate.update("DELETE FROM stock_transaction_details WHERE transaction_id = ?", existing.id().toString());
+        jdbcTemplate.update(
+                "DELETE FROM transactions WHERE id = ? AND user_id = ?",
+                existing.id().toString(),
+                id(user.id())
+        );
+    }
+
     public List<StockPositionView> getHoldings(PortfolioMetadataRepository.UserRecord user,
                                                String market,
                                                boolean sortByDayChange) {
@@ -1344,6 +1358,38 @@ public class StockLedgerService {
                 .filter(entry -> requestedId.equals(entry.id()))
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transaction not found"));
+    }
+
+    private void ensureDeleteAllowed(PortfolioMetadataRepository.UserRecord user, LedgerEntry existing) {
+        if (!"BUY".equals(existing.transactionType())) {
+            return;
+        }
+        List<LedgerEntry> laterEntries = loadLedgerByPortfolio(user, existing.accountId()).stream()
+                .filter(entry -> !entry.id().equals(existing.id()))
+                .filter(entry -> entry.symbol().equalsIgnoreCase(existing.symbol()))
+                .filter(entry -> {
+                    LocalDate relevantDate = "DIVIDEND".equals(entry.transactionType())
+                            ? (entry.exDate() == null ? entry.date() : entry.exDate())
+                            : entry.date();
+                    return relevantDate != null && !relevantDate.isBefore(existing.date());
+                })
+                .toList();
+
+        boolean hasDependentSell = laterEntries.stream().anyMatch(entry -> "SELL".equals(entry.transactionType()));
+        if (hasDependentSell) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Delete later sell transactions for " + existing.symbol() + " before deleting this buy."
+            );
+        }
+
+        boolean hasDependentDividend = laterEntries.stream().anyMatch(entry -> "DIVIDEND".equals(entry.transactionType()));
+        if (hasDependentDividend) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Delete later dividend transactions for " + existing.symbol() + " before deleting this buy."
+            );
+        }
     }
 
     private List<StocksData.Candlestick> buildMarketCandles(PortfolioMetadataRepository.UserRecord user,

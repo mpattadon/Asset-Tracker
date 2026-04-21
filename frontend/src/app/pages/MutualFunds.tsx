@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { Card } from "../components/ui/card";
-import { Button } from "../components/ui/button";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "../components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import {
   Select,
   SelectContent,
@@ -10,138 +9,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { ChevronDown, ChevronUp, Plus, TrendingDown, TrendingUp } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { ChevronDown, ChevronUp, Pencil, Plus } from "lucide-react";
 import { TradingViewChart } from "../components/charts/TradingViewChart";
-import { AddBankAccountDialog } from "../components/AddBankAccountDialog";
+import { AddMutualFundAccountDialog } from "../components/AddMutualFundAccountDialog";
 import { AddPurchaseDialog } from "../components/AddPurchaseDialog";
-import { LogMonthlyDataDialog } from "../components/LogMonthlyDataDialog";
+import { DataCard, PageContainer, PageHeader } from "../components/layout/index";
 import { PortfolioChartPanel } from "../components/stocks/PortfolioChartPanel";
-import { Candlestick, StockSummary } from "../api";
-import { PageContainer, PageHeader } from "../components/layout/index";
+import { LogMonthlyDataDialog } from "../components/LogMonthlyDataDialog";
+import { SellMutualFundDialog } from "../components/SellMutualFundDialog";
 import { useAuth } from "../auth";
+import {
+  getMutualFundAccounts,
+  getMutualFundDashboard,
+  MutualFundAccount,
+  MutualFundAccountDetailView,
+  MutualFundAccountSummaryView,
+  MutualFundDashboard,
+  MutualFundHoldingView,
+  MutualFundMonthlyLogView,
+  MutualFundPurchaseView,
+  MutualFundSaleAccountView,
+  MutualFundSaleView,
+  StockSummary,
+} from "../api";
 import { usePreferences } from "../preferences";
 
-interface MonthlyEntry {
-  month: string;
-  invested: number;
-  marketValue: number;
-  dividends: number;
-}
-
-interface Fund {
-  name: string;
-  riskLevel: "Low" | "Medium" | "High";
-  category: string;
-  totalInvested: number;
-  currentValue: number;
-  dividends: number;
-  monthlyData: MonthlyEntry[];
-  chartData: { value: number }[];
-}
-
-interface FundAccount {
-  accountNumber: string;
-  notes: string;
-  funds: Fund[];
-}
-
-interface FundBank {
-  bank: string;
-  accounts: FundAccount[];
-}
-
-const fundsData: FundBank[] = [
-  {
-    bank: "SCB",
-    accounts: [
-      {
-        accountNumber: "XXX-X-XXXXX-X",
-        notes: "SCBAM",
-        funds: [
-          {
-            name: "SCB-GMCORE(A)",
-            riskLevel: "Low",
-            category: "Equity",
-            totalInvested: 50000,
-            currentValue: 54200,
-            dividends: 1200,
-            monthlyData: [
-              { month: "Jan 2026", invested: 50000, marketValue: 51500, dividends: 200 },
-              { month: "Feb 2026", invested: 50000, marketValue: 52800, dividends: 400 },
-              { month: "Mar 2026", invested: 50000, marketValue: 54200, dividends: 600 },
-            ],
-            chartData: [{ value: 51500 }, { value: 52800 }, { value: 54200 }],
-          },
-          {
-            name: "SCB-EQUITY",
-            riskLevel: "High",
-            category: "Equity",
-            totalInvested: 30000,
-            currentValue: 32400,
-            dividends: 800,
-            monthlyData: [
-              { month: "Jan 2026", invested: 30000, marketValue: 30900, dividends: 200 },
-              { month: "Feb 2026", invested: 30000, marketValue: 31800, dividends: 400 },
-              { month: "Mar 2026", invested: 30000, marketValue: 32400, dividends: 200 },
-            ],
-            chartData: [{ value: 30900 }, { value: 31800 }, { value: 32400 }],
-          },
-        ],
-      },
-      {
-        accountNumber: "XXX-X-XXXXX-Y",
-        notes: "Link account",
-        funds: [
-          {
-            name: "SCB-DIVIDEND",
-            riskLevel: "Medium",
-            category: "Mixed",
-            totalInvested: 40000,
-            currentValue: 41500,
-            dividends: 2100,
-            monthlyData: [
-              { month: "Jan 2026", invested: 40000, marketValue: 40500, dividends: 700 },
-              { month: "Feb 2026", invested: 40000, marketValue: 41000, dividends: 700 },
-              { month: "Mar 2026", invested: 40000, marketValue: 41500, dividends: 700 },
-            ],
-            chartData: [{ value: 40500 }, { value: 41000 }, { value: 41500 }],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    bank: "BBL",
-    accounts: [
-      {
-        accountNumber: "XXX-X-XXXXX-Z",
-        notes: "BBLAM",
-        funds: [
-          {
-            name: "BBL-GROWTH",
-            riskLevel: "High",
-            category: "Equity",
-            totalInvested: 25000,
-            currentValue: 26800,
-            dividends: 400,
-            monthlyData: [
-              { month: "Jan 2026", invested: 25000, marketValue: 25600, dividends: 100 },
-              { month: "Feb 2026", invested: 25000, marketValue: 26200, dividends: 150 },
-              { month: "Mar 2026", invested: 25000, marketValue: 26800, dividends: 150 },
-            ],
-            chartData: [{ value: 25600 }, { value: 26200 }, { value: 26800 }],
-          },
-        ],
-      },
-    ],
-  },
-];
-
-interface FundCardProps {
-  fund: Fund;
-  currency: string;
-  canEdit: boolean;
-}
+type MutualFundTab = "overview" | "accounts" | "sells";
 
 function symbolForCurrency(currency: string) {
   return (
@@ -164,263 +58,577 @@ function formatMoney(currency: string, amount: number, digits = 2) {
   })}`;
 }
 
-function monthLabelToIso(label: string) {
-  const parsed = Date.parse(`01 ${label}`);
-  if (Number.isNaN(parsed)) {
-    return "2026-01-01";
+function formatDisplayDate(value: string) {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
   }
-  return new Date(parsed).toISOString().slice(0, 10);
+  const day = String(parsed.getUTCDate()).padStart(2, "0");
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const year = parsed.getUTCFullYear();
+  return `${day}-${month}-${year}`;
 }
 
-function monthlyEntriesToCandles(entries: MonthlyEntry[]): Candlestick[] {
-  return entries.map((entry, index) => {
-    const previousClose = index > 0 ? entries[index - 1].marketValue : entry.marketValue;
-    const close = entry.marketValue;
-    return {
-      time: monthLabelToIso(entry.month),
-      open: previousClose,
-      high: Math.max(previousClose, close),
-      low: Math.min(previousClose, close),
-      close,
-    };
-  });
-}
-
-function performanceEntriesToCandles(entries: MonthlyEntry[]): Candlestick[] {
-  return entries.map((entry, index) => {
-    const previousEntry = index > 0 ? entries[index - 1] : entry;
-    const currentPerformance =
-      entry.invested === 0 ? 0 : ((entry.marketValue - entry.invested) / entry.invested) * 100;
-    const previousPerformance =
-      previousEntry.invested === 0
-        ? currentPerformance
-        : ((previousEntry.marketValue - previousEntry.invested) / previousEntry.invested) * 100;
-    return {
-      time: monthLabelToIso(entry.month),
-      open: previousPerformance,
-      high: Math.max(previousPerformance, currentPerformance),
-      low: Math.min(previousPerformance, currentPerformance),
-      close: currentPerformance,
-    };
-  });
-}
-
-function buildMutualFundSummary(
-  banks: FundBank[],
-  preferredCurrency: string,
-  selectedBank: string,
-  selectedAccount: string,
-): StockSummary {
-  const timeline = new Map<string, { invested: number; value: number }>();
-  const allFunds = banks.flatMap((bank) => bank.accounts.flatMap((account) => account.funds));
-
-  for (const fund of allFunds) {
-    for (const entry of fund.monthlyData) {
-      const key = monthLabelToIso(entry.month);
-      const current = timeline.get(key) ?? { invested: 0, value: 0 };
-      current.invested += entry.invested;
-      current.value += entry.marketValue;
-      timeline.set(key, current);
-    }
-  }
-
-  const orderedTimeline = Array.from(timeline.entries())
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([time, entry]) => ({
-      time,
-      invested: entry.invested,
-      marketValue: entry.value,
-    }));
-
-  const dailyHistory = monthlyEntriesToCandles(
-    orderedTimeline.map((entry) => ({
-      month: new Date(entry.time).toLocaleString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }),
-      invested: entry.invested,
-      marketValue: entry.marketValue,
-      dividends: 0,
-    })),
-  );
-  const performanceDailyHistory = performanceEntriesToCandles(
-    orderedTimeline.map((entry) => ({
-      month: new Date(entry.time).toLocaleString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }),
-      invested: entry.invested,
-      marketValue: entry.marketValue,
-      dividends: 0,
-    })),
-  );
-
-  const latest = orderedTimeline.at(-1) ?? { invested: 0, marketValue: 0 };
-  const previous = orderedTimeline.length > 1 ? orderedTimeline[orderedTimeline.length - 2] : latest;
-  const totalChange = latest.marketValue - latest.invested;
-  const totalChangePct = latest.invested === 0 ? 0 : (totalChange / latest.invested) * 100;
-  const dayChange = latest.marketValue - previous.marketValue;
-  const dayChangePct = previous.marketValue === 0 ? 0 : (dayChange / previous.marketValue) * 100;
-
-  const title =
-    selectedAccount !== "all"
-      ? selectedAccount
-      : selectedBank !== "all"
-      ? `${selectedBank} Mutual Funds`
-      : "All Mutual Funds";
-
+function emptySummary(currency: string): StockSummary {
   return {
     market: "mutual-funds",
-    title,
-    currency: preferredCurrency,
-    totalValue: latest.marketValue,
-    dayChange,
-    dayChangePct,
-    totalChange,
-    totalChangePct,
-    series: orderedTimeline.map((entry) => entry.marketValue),
-    candlesticks: dailyHistory,
+    title: "All Mutual Funds",
+    currency,
+    totalValue: 0,
+    dayChange: 0,
+    dayChangePct: 0,
+    totalChange: 0,
+    totalChangePct: 0,
+    series: [],
+    candlesticks: [],
     intradayHistory: [],
-    dailyHistory,
+    dailyHistory: [],
     performanceIntradayHistory: [],
-    performanceDailyHistory,
+    performanceDailyHistory: [],
   };
 }
 
-function FundCard({ fund, currency, canEdit }: FundCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const gainLoss = fund.currentValue - fund.totalInvested;
-  const gainLossPercent = fund.totalInvested === 0 ? 0 : (gainLoss / fund.totalInvested) * 100;
-  const isPositive = gainLoss >= 0;
-  const chartSeries = fund.chartData.map((entry, index) => ({
-    time: monthLabelToIso(fund.monthlyData[index]?.month ?? `Jan ${2026 + index}`),
-    value: entry.value,
-  }));
+function logSeries(logs: MutualFundHoldingView["monthlyLogs"]) {
+  return logs
+    .slice()
+    .sort((left, right) => left.logDate.localeCompare(right.logDate))
+    .map((entry) => ({
+      time: entry.logDate,
+      value: entry.marketValue,
+    }));
+}
+
+function formatUnits(value: number) {
+  return value.toLocaleString("en-US", {
+    maximumFractionDigits: 4,
+  });
+}
+
+function MutualFundHoldingCard({
+  holding,
+  accountCurrency,
+  accountId,
+  bankName,
+  accountNumber,
+  collapsed,
+  onToggleCollapse,
+  onEditPurchase,
+  onEditLog,
+  onSell,
+}: {
+  holding: MutualFundHoldingView;
+  accountCurrency: string;
+  accountId: string;
+  bankName: string;
+  accountNumber: string;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onEditPurchase: (
+    purchase: MutualFundPurchaseView & { fundName: string; accountId: string; bankName: string },
+  ) => void;
+  onEditLog: (
+    log: MutualFundMonthlyLogView & { fundName: string; accountId: string; bankName: string },
+  ) => void;
+  onSell?: (context: {
+    accountId: string;
+    bankName: string;
+    accountNumber: string;
+    currency: string;
+    fundName: string;
+  }) => void;
+}) {
+  const latestLog = holding.monthlyLogs.at(0) ?? null;
+  const positive = holding.gainLoss >= 0;
+  const ledgerEntries = useMemo(
+    () =>
+      [
+        ...holding.purchases.map((purchase) => ({
+          kind: "purchase" as const,
+          sortDate: purchase.purchaseDate,
+          purchase,
+        })),
+        ...holding.monthlyLogs.map((log) => ({
+          kind: "log" as const,
+          sortDate: log.logDate,
+          log,
+        })),
+      ].sort((left, right) => right.sortDate.localeCompare(left.sortDate)),
+    [holding.monthlyLogs, holding.purchases],
+  );
 
   return (
-    <Card className="border-gray-200 bg-white shadow-sm">
-      <div className="p-5">
-        <div className="mb-4 flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <h4 className="text-base font-medium text-gray-900">{fund.name}</h4>
-            <Badge
-              variant="outline"
-              className={
-                fund.riskLevel === "Low"
-                  ? "border-green-200 bg-green-50 text-green-700"
-                  : fund.riskLevel === "Medium"
-                  ? "border-yellow-200 bg-yellow-50 text-yellow-700"
-                  : "border-red-200 bg-red-50 text-red-700"
-              }
-            >
-              {fund.riskLevel}
-            </Badge>
-            <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-500">{fund.category}</span>
+    <Card className="border-gray-200 bg-white p-4 shadow-sm">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-medium text-gray-950">{holding.fundName}</h4>
+            <p className="mt-1 text-xs text-gray-500">
+              {latestLog ? `Latest log ${formatDisplayDate(latestLog.logDate)}` : "No monthly logs yet"}
+            </p>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setExpanded(!expanded)}
-            className="gap-1"
-          >
-            {expanded ? (
-              <>
-                <ChevronUp className="h-4 w-4" />
-                Hide
-              </>
-            ) : (
-              <>
-                <ChevronDown className="h-4 w-4" />
-                Details
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-xs text-gray-600">
+              Risk {holding.riskLevel}
+            </Badge>
+            <Badge variant="outline" className="text-xs text-gray-600">
+              {accountCurrency}
+            </Badge>
+            {onSell ? (
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                className="h-8 px-3 text-xs"
+                onClick={() =>
+                  onSell({
+                    accountId,
+                    bankName,
+                    accountNumber,
+                    currency: accountCurrency,
+                    fundName: holding.fundName,
+                  })
+                }
+              >
+                Sell
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={onToggleCollapse}
+            >
+              {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
 
-        <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <div>
-            <p className="mb-1 text-xs text-gray-500">Total Invested</p>
-            <p className="text-base font-medium text-gray-900">{formatMoney(currency, fund.totalInvested)}</p>
-          </div>
-          <div>
-            <p className="mb-1 text-xs text-gray-500">Current Value</p>
-            <p className="text-base font-medium text-gray-900">{formatMoney(currency, fund.currentValue)}</p>
-          </div>
-          <div>
-            <p className="mb-1 text-xs text-gray-500">Gain/Loss</p>
-            <div className="flex items-center gap-1">
-              <p className={`text-base font-medium ${isPositive ? "text-green-600" : "text-red-600"}`}>
-                {isPositive ? "+" : ""}
-                {formatMoney(currency, gainLoss)}
-              </p>
-              {isPositive ? (
-                <TrendingUp className="h-4 w-4 text-green-600" />
-              ) : (
-                <TrendingDown className="h-4 w-4 text-red-600" />
-              )}
-            </div>
-            <p className={`text-xs ${isPositive ? "text-green-600" : "text-red-600"}`}>
-              {isPositive ? "+" : ""}
-              {gainLossPercent.toFixed(2)}%
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Invested</p>
+            <p className="text-sm font-medium text-gray-900">
+              {formatMoney(accountCurrency, holding.totalInvested)}
             </p>
           </div>
           <div>
-            <p className="mb-1 text-xs text-gray-500">Total Dividends</p>
-            <p className="text-base font-medium text-gray-900">{formatMoney(currency, fund.dividends)}</p>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Current Value</p>
+            <p className="text-sm font-medium text-gray-900">
+              {formatMoney(accountCurrency, holding.currentValue)}
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Dividends</p>
+            <p className="text-sm font-medium text-gray-900">
+              {formatMoney(accountCurrency, holding.dividends)}
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Gain/Loss</p>
+            <p className={`text-sm font-medium ${positive ? "text-green-600" : "text-red-600"}`}>
+              {positive ? "+" : "-"}
+              {formatMoney(accountCurrency, Math.abs(holding.gainLoss))} (
+              {Math.abs(holding.gainLossPct).toFixed(2)}%)
+            </p>
           </div>
         </div>
 
-        <div className="h-16 w-full">
-          <TradingViewChart
-            height={64}
-            mode="line"
-            lineData={chartSeries}
-            currency={currency}
-            accentColor={isPositive ? "#10b981" : "#ef4444"}
-          />
-        </div>
-      </div>
+        {!collapsed && holding.monthlyLogs.length ? (
+          <div className="space-y-3">
+            <div className="h-24">
+              <TradingViewChart
+                height={96}
+                mode="line"
+                lineData={logSeries(holding.monthlyLogs)}
+                currency={accountCurrency}
+                accentColor={positive ? "#16a34a" : "#dc2626"}
+              />
+            </div>
 
-      {expanded ? (
-        <div className="border-t border-gray-200 bg-gray-50 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h5 className="text-sm font-medium text-gray-900">Monthly Data</h5>
-            <Button variant="outline" size="sm" className="gap-2" disabled={!canEdit}>
-              <Plus className="h-4 w-4" />
-              {canEdit ? "Add Monthly Entry" : "Login to Add"}
-            </Button>
-          </div>
           <div className="space-y-2">
-            {fund.monthlyData.map((entry, index) => {
-              const monthGainLoss = entry.marketValue - entry.invested;
-              const monthIsPositive = monthGainLoss >= 0;
-              return (
-                <div key={index} className="rounded-lg border border-gray-200 bg-white p-4">
-                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+            {ledgerEntries.map((entry) =>
+                entry.kind === "purchase" ? (
+                  <div
+                    key={`purchase-${entry.purchase.id}`}
+                    className="grid grid-cols-2 gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr_auto]"
+                  >
                     <div>
-                      <p className="mb-1 text-xs text-gray-500">Month</p>
-                      <p className="text-sm font-medium text-gray-900">{entry.month}</p>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Type</p>
+                      <p className="mt-1 font-medium text-gray-900">Purchase</p>
                     </div>
                     <div>
-                      <p className="mb-1 text-xs text-gray-500">Invested</p>
-                      <p className="text-sm text-gray-900">{formatMoney(currency, entry.invested)}</p>
-                    </div>
-                    <div>
-                      <p className="mb-1 text-xs text-gray-500">Market Value</p>
-                      <p className="text-sm text-gray-900">{formatMoney(currency, entry.marketValue)}</p>
-                    </div>
-                    <div>
-                      <p className="mb-1 text-xs text-gray-500">Gain/Loss</p>
-                      <p className={`text-sm font-medium ${monthIsPositive ? "text-green-600" : "text-red-600"}`}>
-                        {monthIsPositive ? "+" : ""}
-                        {formatMoney(currency, monthGainLoss)}
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Date</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatDisplayDate(entry.purchase.purchaseDate)}
                       </p>
                     </div>
                     <div>
-                      <p className="mb-1 text-xs text-gray-500">Dividends</p>
-                      <p className="text-sm text-gray-900">{formatMoney(currency, entry.dividends)}</p>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Price / Unit</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatMoney(accountCurrency, entry.purchase.averageCostPerUnit, 4)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Units</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatUnits(entry.purchase.unitsPurchased)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Dividend</p>
+                      <p className="mt-1 font-medium text-gray-900">—</p>
+                    </div>
+                    <div>
+                      <div>
+                        <p className="uppercase tracking-[0.12em] text-gray-500">Total</p>
+                        <p className="mt-1 font-medium text-gray-900">
+                          {formatMoney(accountCurrency, entry.purchase.totalCost)}
+                        </p>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Market Value</p>
+                      <p className="mt-1 font-medium text-gray-900">—</p>
+                    </div>
+                    <div className="flex items-end justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() =>
+                          onEditPurchase({
+                            ...entry.purchase,
+                            fundName: holding.fundName,
+                            accountId,
+                            bankName,
+                          })
+                        }
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
+                ) : (
+                  <div
+                    key={`log-${entry.log.id}`}
+                    className="grid grid-cols-2 gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr_auto]"
+                  >
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Type</p>
+                      <p className="mt-1 font-medium text-gray-900">Monthly Log</p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Date</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatDisplayDate(entry.log.logDate)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Price / Unit</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatMoney(accountCurrency, entry.log.pricePerUnit, 4)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Units</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {entry.log.pricePerUnit > 0
+                          ? formatUnits(entry.log.marketValue / entry.log.pricePerUnit)
+                          : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Dividend</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatMoney(accountCurrency, entry.log.dividendReceived)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Total</p>
+                      <p className="mt-1 font-medium text-gray-900">—</p>
+                    </div>
+                    <div>
+                      <p className="uppercase tracking-[0.12em] text-gray-500">Market Value</p>
+                      <p className="mt-1 font-medium text-gray-900">
+                        {formatMoney(accountCurrency, entry.log.marketValue)}
+                      </p>
+                    </div>
+                    <div className="flex items-end justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() =>
+                          onEditLog({
+                            ...entry.log,
+                            fundName: holding.fundName,
+                            accountId,
+                            bankName,
+                          })
+                        }
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
+        ) : !collapsed ? (
+          <div className="space-y-2">
+            {holding.purchases.map((purchase) => (
+              <div
+                key={`purchase-${purchase.id}`}
+                className="grid grid-cols-2 gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr_auto]"
+              >
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Type</p>
+                  <p className="mt-1 font-medium text-gray-900">Purchase</p>
                 </div>
-              );
-            })}
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Date</p>
+                  <p className="mt-1 font-medium text-gray-900">
+                    {formatDisplayDate(purchase.purchaseDate)}
+                  </p>
+                </div>
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Price / Unit</p>
+                  <p className="mt-1 font-medium text-gray-900">
+                    {formatMoney(accountCurrency, purchase.averageCostPerUnit, 4)}
+                  </p>
+                </div>
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Units</p>
+                  <p className="mt-1 font-medium text-gray-900">{formatUnits(purchase.unitsPurchased)}</p>
+                </div>
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Dividend</p>
+                  <p className="mt-1 font-medium text-gray-900">—</p>
+                </div>
+                <div>
+                  <div>
+                    <p className="uppercase tracking-[0.12em] text-gray-500">Total</p>
+                    <p className="mt-1 font-medium text-gray-900">
+                      {formatMoney(accountCurrency, purchase.totalCost)}
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Market Value</p>
+                  <p className="mt-1 font-medium text-gray-900">—</p>
+                </div>
+                <div className="flex items-end justify-end">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() =>
+                      onEditPurchase({
+                        ...purchase,
+                        fundName: holding.fundName,
+                        accountId,
+                        bankName,
+                      })
+                    }
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {!holding.purchases.length ? (
+              <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                No purchase or monthly log entries recorded for this fund yet.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+function SaleAccountCard({
+  saleAccount,
+  onEditSale,
+}: {
+  saleAccount: MutualFundSaleAccountView;
+  onEditSale: (
+    sale: MutualFundSaleView & {
+      accountId: string;
+      bankName: string;
+      accountNumber: string;
+      currency: string;
+    },
+  ) => void;
+}) {
+  const positive = saleAccount.totalGainLoss >= 0;
+
+  return (
+    <DataCard
+      className="border-gray-200"
+      title={`${saleAccount.bankName} · ${saleAccount.accountNumber}`}
+      action={
+        <div className="text-right text-xs text-gray-500">
+          <div>{saleAccount.currency}</div>
+          {saleAccount.notes ? <div>{saleAccount.notes}</div> : null}
+        </div>
+      }
+    >
+      <div className="space-y-4 p-4 md:p-6">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Realized Gain/Loss</p>
+            <p className={`text-sm font-medium ${saleAccount.realizedGainLoss >= 0 ? "text-green-600" : "text-red-600"}`}>
+              {saleAccount.realizedGainLoss >= 0 ? "+" : "-"}
+              {formatMoney(saleAccount.currency, Math.abs(saleAccount.realizedGainLoss))}
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Dividends</p>
+            <p className="text-sm font-medium text-gray-900">
+              {formatMoney(saleAccount.currency, saleAccount.dividends)}
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Total Gain/Loss</p>
+            <p className={`text-sm font-medium ${positive ? "text-green-600" : "text-red-600"}`}>
+              {positive ? "+" : "-"}
+              {formatMoney(saleAccount.currency, Math.abs(saleAccount.totalGainLoss))}
+            </p>
           </div>
         </div>
-      ) : null}
+
+        <div className="space-y-2">
+          {saleAccount.sales.map((sale) => (
+            <div
+              key={sale.id}
+              className="grid grid-cols-2 gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 sm:grid-cols-7"
+            >
+              <div>
+                <p className="uppercase tracking-[0.12em] text-gray-500">Fund</p>
+                <p className="mt-1 font-medium text-gray-900">{sale.fundName}</p>
+              </div>
+              <div>
+                <p className="uppercase tracking-[0.12em] text-gray-500">Date</p>
+                <p className="mt-1 font-medium text-gray-900">{formatDisplayDate(sale.saleDate)}</p>
+              </div>
+              <div>
+                <p className="uppercase tracking-[0.12em] text-gray-500">Units Sold</p>
+                <p className="mt-1 font-medium text-gray-900">
+                  {sale.unitsSold.toLocaleString("en-US", { maximumFractionDigits: 4 })}
+                </p>
+              </div>
+              <div>
+                <p className="uppercase tracking-[0.12em] text-gray-500">Price / Unit</p>
+                <p className="mt-1 font-medium text-gray-900">
+                  {formatMoney(saleAccount.currency, sale.salePricePerUnit, 4)}
+                </p>
+              </div>
+              <div>
+                <p className="uppercase tracking-[0.12em] text-gray-500">Proceeds</p>
+                <p className="mt-1 font-medium text-gray-900">
+                  {formatMoney(saleAccount.currency, sale.proceeds)}
+                </p>
+              </div>
+              <div>
+                <p className="uppercase tracking-[0.12em] text-gray-500">Fund Dividends</p>
+                <p className="mt-1 font-medium text-gray-900">
+                  {formatMoney(saleAccount.currency, sale.fundDividends)}
+                </p>
+              </div>
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <p className="uppercase tracking-[0.12em] text-gray-500">Realized Gain/Loss</p>
+                  <p className={`mt-1 font-medium ${sale.realizedGainLoss >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    {sale.realizedGainLoss >= 0 ? "+" : "-"}
+                    {formatMoney(saleAccount.currency, Math.abs(sale.realizedGainLoss))}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() =>
+                    onEditSale({
+                      ...sale,
+                      accountId: saleAccount.id,
+                      bankName: saleAccount.bankName,
+                      accountNumber: saleAccount.accountNumber,
+                      currency: saleAccount.currency,
+                    })
+                  }
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </DataCard>
+  );
+}
+
+function AccountOverviewCard({
+  summary,
+}: {
+  summary: MutualFundAccountSummaryView;
+}) {
+  const positive = summary.gainLoss >= 0;
+
+  return (
+    <Card className="border-gray-200 bg-white p-5 shadow-sm">
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-gray-950">{summary.accountNumber}</p>
+            <p className="mt-1 text-xs text-gray-500">
+              {summary.bankName}
+              {summary.notes ? ` · ${summary.notes}` : ""}
+            </p>
+          </div>
+          <Badge variant="outline" className="text-xs text-gray-600">
+            Account
+          </Badge>
+        </div>
+
+        <div>
+          <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Current Value</p>
+          <p className="text-2xl font-semibold text-gray-950">
+            {formatMoney(summary.currency, summary.currentValue)}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Invested</p>
+            <p className="font-medium text-gray-900">
+              {formatMoney(summary.currency, summary.totalInvested)}
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Dividends</p>
+            <p className="font-medium text-gray-900">
+              {formatMoney(summary.currency, summary.dividends)}
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Gain/Loss</p>
+          <p className={`text-base font-medium ${positive ? "text-green-600" : "text-red-600"}`}>
+            {positive ? "+" : "-"}
+            {formatMoney(summary.currency, Math.abs(summary.gainLoss))} (
+            {Math.abs(summary.gainLossPct).toFixed(2)}%)
+          </p>
+        </div>
+      </div>
     </Card>
   );
 }
@@ -428,78 +636,180 @@ function FundCard({ fund, currency, canEdit }: FundCardProps) {
 export function MutualFunds() {
   const { authState } = useAuth();
   const { preferredCurrency } = usePreferences();
-  const [activeTab, setActiveTab] = useState("overview");
-  const [selectedBank, setSelectedBank] = useState<string>("all");
-  const [selectedAccount, setSelectedAccount] = useState<string>("all");
+  const [activeTab, setActiveTab] = useState<MutualFundTab>("overview");
+  const [selectedBank, setSelectedBank] = useState("all");
+  const [selectedAccount, setSelectedAccount] = useState("all");
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [addPurchaseOpen, setAddPurchaseOpen] = useState(false);
   const [logMonthlyOpen, setLogMonthlyOpen] = useState(false);
+  const [sellOpen, setSellOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<MutualFundAccount | null>(null);
+  const [editingPurchase, setEditingPurchase] = useState<
+    (MutualFundPurchaseView & { fundName: string; accountId: string; bankName: string }) | null
+  >(null);
+  const [editingLog, setEditingLog] = useState<
+    (MutualFundMonthlyLogView & { fundName: string; accountId: string; bankName: string }) | null
+  >(null);
+  const [sellContext, setSellContext] = useState<{
+    accountId: string;
+    bankName: string;
+    accountNumber: string;
+    currency: string;
+    fundName: string;
+  } | null>(null);
+  const [editingSale, setEditingSale] = useState<
+    (MutualFundSaleView & {
+      accountId: string;
+      bankName: string;
+      accountNumber: string;
+      currency: string;
+    }) | null
+  >(null);
+  const [collapsedAccountIds, setCollapsedAccountIds] = useState<string[]>([]);
+  const [collapsedFundKeys, setCollapsedFundKeys] = useState<string[]>([]);
+  const [accounts, setAccounts] = useState<MutualFundAccount[]>([]);
+  const [overviewDashboard, setOverviewDashboard] = useState<MutualFundDashboard | null>(null);
+  const [accountsDashboard, setAccountsDashboard] = useState<MutualFundDashboard | null>(null);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
-  const bankOptions = useMemo(() => fundsData.map((bank) => bank.bank), []);
-  const accountOptions = useMemo(() => {
-    const banks =
-      selectedBank === "all" ? fundsData : fundsData.filter((bank) => bank.bank === selectedBank);
-    return banks.flatMap((bank) => bank.accounts.map((account) => account.accountNumber));
-  }, [selectedBank]);
+  const bankOptions = useMemo(
+    () => Array.from(new Set(accounts.map((account) => account.bankName))).sort(),
+    [accounts],
+  );
+
+  const accountOptions = useMemo(
+    () =>
+      accounts.filter(
+        (account) => selectedBank === "all" || account.bankName === selectedBank,
+      ),
+    [accounts, selectedBank],
+  );
 
   useEffect(() => {
-    if (selectedAccount !== "all" && !accountOptions.includes(selectedAccount)) {
+    if (
+      selectedAccount !== "all" &&
+      !accountOptions.some((account) => account.id === selectedAccount)
+    ) {
       setSelectedAccount("all");
     }
   }, [accountOptions, selectedAccount]);
 
-  const filteredBanks = useMemo(() => {
-    return fundsData
-      .filter((bank) => selectedBank === "all" || bank.bank === selectedBank)
-      .map((bank) => ({
-        ...bank,
-        accounts: bank.accounts.filter(
-          (account) => selectedAccount === "all" || account.accountNumber === selectedAccount,
-        ),
-      }))
-      .filter((bank) => bank.accounts.length > 0);
+  const loadAccounts = useCallback(async () => {
+    setAccountsLoading(true);
+    try {
+      setAccounts(await getMutualFundAccounts());
+    } finally {
+      setAccountsLoading(false);
+    }
+  }, []);
+
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true);
+    try {
+      setOverviewDashboard(await getMutualFundDashboard());
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, []);
+
+  const loadAccountsView = useCallback(async () => {
+    setDetailLoading(true);
+    try {
+      if (selectedBank === "all" && selectedAccount === "all") {
+        setAccountsDashboard(await getMutualFundDashboard());
+      } else {
+        setAccountsDashboard(await getMutualFundDashboard(selectedBank, selectedAccount));
+      }
+    } finally {
+      setDetailLoading(false);
+    }
   }, [selectedAccount, selectedBank]);
 
-  const aggregateSummary = useMemo(
-    () => buildMutualFundSummary(filteredBanks, preferredCurrency, selectedBank, selectedAccount),
-    [filteredBanks, preferredCurrency, selectedAccount, selectedBank],
-  );
+  const refreshMutualFunds = useCallback(async () => {
+    setLoadError("");
+    try {
+      await Promise.all([loadAccounts(), loadOverview(), loadAccountsView()]);
+    } catch (requestError) {
+      setLoadError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to load mutual fund data.",
+      );
+    }
+  }, [loadAccounts, loadAccountsView, loadOverview]);
 
-  const accountSummaries = useMemo(() => {
-    return filteredBanks.flatMap((bank) =>
-      bank.accounts.map((account) => {
-        const invested = account.funds.reduce((sum, fund) => sum + fund.totalInvested, 0);
-        const currentValue = account.funds.reduce((sum, fund) => sum + fund.currentValue, 0);
-        const dividends = account.funds.reduce((sum, fund) => sum + fund.dividends, 0);
-        const gainLoss = currentValue - invested;
-        const gainLossPct = invested === 0 ? 0 : (gainLoss / invested) * 100;
-        return {
-          bank: bank.bank,
-          accountNumber: account.accountNumber,
-          notes: account.notes,
-          invested,
-          currentValue,
-          dividends,
-          gainLoss,
-          gainLossPct,
-        };
-      }),
+  useEffect(() => {
+    void refreshMutualFunds();
+  }, [preferredCurrency, refreshMutualFunds]);
+
+  useEffect(() => {
+    if (activeTab === "accounts" || activeTab === "sells") {
+      void loadAccountsView().catch((requestError) => {
+        setLoadError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Unable to load mutual fund accounts.",
+        );
+      });
+    }
+  }, [activeTab, loadAccountsView]);
+
+  const activeDashboard = activeTab === "overview" ? overviewDashboard : accountsDashboard;
+  const displaySummary = activeDashboard?.summary ?? emptySummary(preferredCurrency);
+  const displayAccountSummaries = overviewDashboard?.accountSummaries ?? [];
+  const displayAccountDetails =
+    activeTab === "accounts"
+      ? accountsDashboard?.accountDetails ?? []
+      : overviewDashboard?.accountDetails ?? [];
+  const displaySaleAccounts =
+    activeTab === "sells"
+      ? accountsDashboard?.saleAccounts ?? []
+      : overviewDashboard?.saleAccounts ?? [];
+
+  const toggleAccountCollapse = useCallback((accountId: string) => {
+    setCollapsedAccountIds((current) =>
+      current.includes(accountId)
+        ? current.filter((value) => value !== accountId)
+        : [...current, accountId],
     );
-  }, [filteredBanks]);
+  }, []);
+
+  const toggleFundCollapse = useCallback((accountId: string, fundName: string) => {
+    const key = `${accountId}:${fundName}`;
+    setCollapsedFundKeys((current) =>
+      current.includes(key)
+        ? current.filter((value) => value !== key)
+        : [...current, key],
+    );
+  }, []);
 
   return (
     <PageContainer>
       <PageHeader title="Mutual Funds" />
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+      {loadError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </div>
+      ) : null}
+
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as MutualFundTab)}
+        className="space-y-6"
+      >
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="accounts">Accounts</TabsTrigger>
+            <TabsTrigger value="sells">Sells</TabsTrigger>
           </TabsList>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            {activeTab === "accounts" ? (
+            {activeTab !== "overview" ? (
               <>
                 <Select value={selectedBank} onValueChange={setSelectedBank}>
                   <SelectTrigger className="w-[150px]">
@@ -516,14 +826,14 @@ export function MutualFunds() {
                 </Select>
 
                 <Select value={selectedAccount} onValueChange={setSelectedAccount}>
-                  <SelectTrigger className="w-[170px]">
+                  <SelectTrigger className="w-[180px]">
                     <SelectValue placeholder="All Accounts" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Accounts</SelectItem>
                     {accountOptions.map((account) => (
-                      <SelectItem key={account} value={account}>
-                        {account}
+                      <SelectItem key={account.id} value={account.id}>
+                        {account.accountNumber}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -532,8 +842,12 @@ export function MutualFunds() {
             ) : null}
 
             <Button
-              variant="outline"
-              onClick={() => setAddAccountOpen(true)}
+              type="button"
+              variant="default"
+              onClick={() => {
+                setEditingAccount(null);
+                setAddAccountOpen(true);
+              }}
               className="gap-2"
               disabled={!authState?.authenticated}
             >
@@ -542,19 +856,27 @@ export function MutualFunds() {
             </Button>
 
             <Button
-              onClick={() => setAddPurchaseOpen(true)}
+              type="button"
+              onClick={() => {
+                setEditingPurchase(null);
+                setAddPurchaseOpen(true);
+              }}
               className="gap-2"
-              disabled={!authState?.authenticated}
+              disabled={!authState?.authenticated || accountsLoading}
             >
               <Plus className="h-4 w-4" />
               {authState?.authenticated ? "Add Purchase" : "Login to Add"}
             </Button>
 
             <Button
-              variant="outline"
-              onClick={() => setLogMonthlyOpen(true)}
+              type="button"
+              variant="default"
+              onClick={() => {
+                setEditingLog(null);
+                setLogMonthlyOpen(true);
+              }}
               className="gap-2"
-              disabled={!authState?.authenticated}
+              disabled={!authState?.authenticated || accountsLoading}
             >
               <Plus className="h-4 w-4" />
               {authState?.authenticated ? "Log Monthly Data" : "Login to Add"}
@@ -564,125 +886,247 @@ export function MutualFunds() {
 
         <TabsContent value="overview" className="space-y-6">
           <PortfolioChartPanel
-            summary={aggregateSummary}
+            summary={displaySummary}
+            loading={overviewLoading}
             badgeLabel="Mutual Fund"
             changeLabel="Latest"
+            availableRanges={["1M", "3M", "6M", "YTD", "1Y", "5Y", "All"]}
+            defaultRange="YTD"
+            defaultChartMode="line"
+            resolutionOptionsOverride={{
+              "1M": ["1d", "1w", "1mo"],
+              "3M": ["1d", "1w", "1mo"],
+              "6M": ["1d", "1w", "1mo"],
+              YTD: ["1d", "1w", "1mo"],
+              "1Y": ["1d", "1w", "1mo"],
+              "5Y": ["1w", "1mo"],
+              All: ["1w", "1mo"],
+            }}
           />
 
-          {accountSummaries.length ? (
+          {displayAccountSummaries.length ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {accountSummaries.map((account) => {
-                const positive = account.gainLoss >= 0;
-                return (
-                  <Card
-                    key={`${account.bank}-${account.accountNumber}`}
-                    className="border-gray-200 bg-white p-5 shadow-sm"
-                  >
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{account.accountNumber}</p>
-                          <p className="mt-1 text-xs text-gray-500">
-                            {account.bank} · {account.notes}
-                          </p>
-                        </div>
-                        <Badge variant="outline" className="text-xs text-gray-600">
-                          Account
-                        </Badge>
-                      </div>
-
-                      <div className="space-y-1">
-                        <p className="text-xs uppercase tracking-[0.16em] text-gray-500">
-                          Current Value
-                        </p>
-                        <p className="text-2xl font-semibold text-gray-950">
-                          {formatMoney(preferredCurrency, account.currentValue)}
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4 text-sm">
-                        <div>
-                          <p className="mb-1 text-xs text-gray-500">Total Invested</p>
-                          <p className="font-medium text-gray-900">
-                            {formatMoney(preferredCurrency, account.invested)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="mb-1 text-xs text-gray-500">Dividends</p>
-                          <p className="font-medium text-gray-900">
-                            {formatMoney(preferredCurrency, account.dividends)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="mb-1 text-xs text-gray-500">Gain/Loss</p>
-                        <p className={`text-base font-medium ${positive ? "text-green-600" : "text-red-600"}`}>
-                          {positive ? "+" : "-"}
-                          {formatMoney(preferredCurrency, Math.abs(account.gainLoss))} (
-                          {Math.abs(account.gainLossPct).toFixed(2)}%)
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
+              {displayAccountSummaries.map((summary) => (
+                <AccountOverviewCard key={summary.id} summary={summary} />
+              ))}
             </div>
           ) : (
             <DataCard className="border-gray-200 bg-white px-6 py-10 text-center text-sm text-gray-500 shadow-sm">
-              No mutual fund accounts match the current bank/account filters.
+              No mutual fund accounts recorded yet.
             </DataCard>
           )}
         </TabsContent>
 
         <TabsContent value="accounts" className="space-y-6">
-          {filteredBanks.length ? (
-            filteredBanks.map((bankData) => (
-              <div key={bankData.bank} className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="h-px flex-1 bg-gray-200" />
-                  <h3 className="text-lg font-medium text-gray-900">{bankData.bank}</h3>
-                  <div className="h-px flex-1 bg-gray-200" />
-                </div>
+          {displayAccountDetails.length ? (
+            displayAccountDetails.map((account) => (
+              (() => {
+                const accountCollapsed = collapsedAccountIds.includes(account.id);
+                const totalInvested = account.funds.reduce((sum, fund) => sum + fund.totalInvested, 0);
+                const totalValue = account.funds.reduce((sum, fund) => sum + fund.currentValue, 0);
+                const totalDividends = account.funds.reduce((sum, fund) => sum + fund.dividends, 0);
+                const totalGainLoss = account.funds.reduce((sum, fund) => sum + fund.gainLoss, 0);
+                const totalGainLossPct =
+                  totalInvested > 0 ? (totalGainLoss / totalInvested) * 100 : 0;
+                const positive = totalGainLoss >= 0;
 
-                {bankData.accounts.map((account) => (
-                  <div key={account.accountNumber} className="space-y-3">
-                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                      <div className="flex items-center justify-between">
+                return (
+                  <DataCard
+                    key={account.id}
+                    className="border-gray-200"
+                    title={`${account.bankName} · ${account.accountNumber}`}
+                    action={
+                      <div className="flex items-center gap-3">
+                        <div className="text-right text-xs text-gray-500">
+                          <div>{account.currency}</div>
+                          {account.notes ? <div>{account.notes}</div> : null}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => toggleAccountCollapse(account.id)}
+                        >
+                          {accountCollapsed ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronUp className="h-4 w-4" />
+                          )}
+                        </Button>
+                        {authState?.authenticated ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => {
+                              const editableAccount =
+                                accounts.find((candidate) => candidate.id === account.id) ?? null;
+                              setEditingAccount(editableAccount);
+                              setAddAccountOpen(true);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                      </div>
+                    }
+                  >
+                    <div className="space-y-4 p-4 md:p-6">
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <span className="uppercase tracking-[0.14em]">Funds</span>
+                        <span className="font-medium text-gray-900">{account.funds.length}</span>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <div>
+                          <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Invested</p>
                           <p className="text-sm font-medium text-gray-900">
-                            Account: {account.accountNumber}
+                            {formatMoney(account.currency, totalInvested)}
                           </p>
-                          <p className="mt-1 text-xs text-gray-500">{account.notes}</p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Current Value</p>
+                          <p className="text-sm font-medium text-gray-900">
+                            {formatMoney(account.currency, totalValue)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Dividends</p>
+                          <p className="text-sm font-medium text-gray-900">
+                            {formatMoney(account.currency, totalDividends)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-[0.14em] text-gray-500">Gain/Loss</p>
+                          <p className={`text-sm font-medium ${positive ? "text-green-600" : "text-red-600"}`}>
+                            {positive ? "+" : "-"}
+                            {formatMoney(account.currency, Math.abs(totalGainLoss))} (
+                            {Math.abs(totalGainLossPct).toFixed(2)}%)
+                          </p>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="ml-4 space-y-3">
-                      {account.funds.map((fund) => (
-                        <FundCard
-                          key={`${account.accountNumber}-${fund.name}`}
-                          fund={fund}
-                          currency={preferredCurrency}
-                          canEdit={Boolean(authState?.authenticated)}
-                        />
-                      ))}
+                      {!accountCollapsed ? (
+                        account.funds.length ? (
+                          account.funds.map((holding) => (
+                            <MutualFundHoldingCard
+                              key={`${account.id}-${holding.fundName}`}
+                              holding={holding}
+                              accountCurrency={account.currency}
+                              accountId={account.id}
+                              bankName={account.bankName}
+                              accountNumber={account.accountNumber}
+                              collapsed={collapsedFundKeys.includes(`${account.id}:${holding.fundName}`)}
+                              onToggleCollapse={() => toggleFundCollapse(account.id, holding.fundName)}
+                              onEditPurchase={(purchase) => {
+                                setEditingPurchase(purchase);
+                                setAddPurchaseOpen(true);
+                              }}
+                              onEditLog={(log) => {
+                                setEditingLog(log);
+                                setLogMonthlyOpen(true);
+                              }}
+                              onSell={
+                                authState?.authenticated
+                                  ? (context) => {
+                                      setSellContext(context);
+                                      setEditingSale(null);
+                                      setSellOpen(true);
+                                    }
+                                  : undefined
+                              }
+                            />
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+                            No funds recorded in this account yet.
+                          </div>
+                        )
+                      ) : null}
                     </div>
-                  </div>
-                ))}
-              </div>
+                  </DataCard>
+                );
+              })()
             ))
           ) : (
             <DataCard className="border-gray-200 bg-white px-6 py-10 text-center text-sm text-gray-500 shadow-sm">
-              No mutual fund accounts match the current bank/account filters.
+              {detailLoading ? "Loading mutual fund accounts..." : "No mutual fund accounts match the current filters."}
+            </DataCard>
+          )}
+        </TabsContent>
+
+        <TabsContent value="sells" className="space-y-6">
+          {displaySaleAccounts.length ? (
+            displaySaleAccounts.map((saleAccount) => (
+              <SaleAccountCard
+                key={saleAccount.id}
+                saleAccount={saleAccount}
+                onEditSale={(sale) => {
+                  setEditingSale(sale);
+                  setSellContext(null);
+                  setSellOpen(true);
+                }}
+              />
+            ))
+          ) : (
+            <DataCard className="border-gray-200 bg-white px-6 py-10 text-center text-sm text-gray-500 shadow-sm">
+              {detailLoading ? "Loading sell history..." : "No mutual fund sales match the current filters."}
             </DataCard>
           )}
         </TabsContent>
       </Tabs>
 
-      <AddBankAccountDialog open={addAccountOpen} onOpenChange={setAddAccountOpen} />
-      <AddPurchaseDialog open={addPurchaseOpen} onOpenChange={setAddPurchaseOpen} />
-      <LogMonthlyDataDialog open={logMonthlyOpen} onOpenChange={setLogMonthlyOpen} />
+      <AddMutualFundAccountDialog
+        open={addAccountOpen}
+        onOpenChange={(open) => {
+          setAddAccountOpen(open);
+          if (!open) {
+            setEditingAccount(null);
+          }
+        }}
+        onCreated={refreshMutualFunds}
+        initialAccount={editingAccount}
+      />
+      <AddPurchaseDialog
+        open={addPurchaseOpen}
+        onOpenChange={(open) => {
+          setAddPurchaseOpen(open);
+          if (!open) {
+            setEditingPurchase(null);
+          }
+        }}
+        accounts={accounts}
+        onCreated={refreshMutualFunds}
+        initialPurchase={editingPurchase}
+      />
+      <LogMonthlyDataDialog
+        open={logMonthlyOpen}
+        onOpenChange={(open) => {
+          setLogMonthlyOpen(open);
+          if (!open) {
+            setEditingLog(null);
+          }
+        }}
+        accounts={accounts}
+        accountDetails={overviewDashboard?.accountDetails ?? []}
+        onCreated={refreshMutualFunds}
+        initialLog={editingLog}
+      />
+      <SellMutualFundDialog
+        open={sellOpen}
+        onOpenChange={(open) => {
+          setSellOpen(open);
+          if (!open) {
+            setSellContext(null);
+            setEditingSale(null);
+          }
+        }}
+        onCreated={refreshMutualFunds}
+        initialContext={sellContext}
+        initialSale={editingSale}
+      />
     </PageContainer>
   );
 }

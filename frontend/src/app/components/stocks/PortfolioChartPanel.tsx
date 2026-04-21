@@ -27,6 +27,10 @@ interface PortfolioChartPanelProps {
   badgeLabel?: string;
   changeLabel?: string;
   showPerformance?: boolean;
+  availableRanges?: RangeKey[];
+  resolutionOptionsOverride?: Partial<Record<RangeKey, ChartResolution[]>>;
+  defaultRange?: RangeKey;
+  defaultChartMode?: PortfolioChartMode;
 }
 
 function symbolForCurrency(currency: string) {
@@ -165,12 +169,21 @@ export function PortfolioChartPanel({
   badgeLabel = "Portfolio",
   changeLabel = "Today",
   showPerformance = true,
+  availableRanges = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "All"],
+  resolutionOptionsOverride,
+  defaultRange,
+  defaultChartMode = "candlestick",
 }: PortfolioChartPanelProps) {
-  const [selectedRange, setSelectedRange] = useState<RangeKey>("1D");
+  const initialRange =
+    defaultRange && availableRanges.includes(defaultRange)
+      ? defaultRange
+      : availableRanges[0] ?? "1D";
+  const [selectedRange, setSelectedRange] = useState<RangeKey>(initialRange);
   const [selectedResolution, setSelectedResolution] = useState<ChartResolution>(
-    defaultResolutionForRange("1D"),
+    (resolutionOptionsOverride?.[initialRange] ?? resolutionOptionsForRange(initialRange))[0] ??
+      defaultResolutionForRange(initialRange),
   );
-  const [chartMode, setChartMode] = useState<PortfolioChartMode>("candlestick");
+  const [chartMode, setChartMode] = useState<PortfolioChartMode>(defaultChartMode);
   const currency = summary.currency || "USD";
 
   const selectedValueHistory = useMemo(
@@ -188,13 +201,37 @@ export function PortfolioChartPanel({
     [selectedRange, summary.performanceDailyHistory, summary.performanceIntradayHistory],
   );
   const resolutionOptions = useMemo(
-    () => resolutionOptionsForRange(selectedRange),
-    [selectedRange],
+    () => resolutionOptionsOverride?.[selectedRange] ?? resolutionOptionsForRange(selectedRange),
+    [resolutionOptionsOverride, selectedRange],
   );
 
   useEffect(() => {
+    if (!availableRanges.includes(selectedRange)) {
+      setSelectedRange(availableRanges[0] ?? "1D");
+    }
+  }, [availableRanges, selectedRange]);
+
+  useEffect(() => {
+    const nextRange =
+      defaultRange && availableRanges.includes(defaultRange)
+        ? defaultRange
+        : availableRanges[0] ?? "1D";
+    setSelectedRange(nextRange);
+    setSelectedResolution(
+      (resolutionOptionsOverride?.[nextRange] ?? resolutionOptionsForRange(nextRange))[0] ??
+        defaultResolutionForRange(nextRange),
+    );
+  }, [availableRanges, defaultRange, resolutionOptionsOverride]);
+
+  useEffect(() => {
+    setChartMode(defaultChartMode);
+  }, [defaultChartMode]);
+
+  useEffect(() => {
     if (!resolutionOptions.includes(selectedResolution)) {
-      setSelectedResolution(defaultResolutionForRange(selectedRange));
+      setSelectedResolution(
+        resolutionOptions[0] ?? defaultResolutionForRange(selectedRange),
+      );
     }
   }, [resolutionOptions, selectedRange, selectedResolution]);
 
@@ -356,7 +393,7 @@ export function PortfolioChartPanel({
 
         <div className="border-t border-gray-200 pt-4">
           <div className="flex flex-wrap items-center gap-2">
-            {(["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "All"] as RangeKey[]).map((range) => (
+            {availableRanges.map((range) => (
               <Button
                 key={range}
                 type="button"

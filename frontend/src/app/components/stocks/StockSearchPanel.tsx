@@ -99,14 +99,12 @@ function formatBarTime(rawTime: string) {
   if (Number.isNaN(date.getTime())) {
     return rawTime;
   }
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${day}-${month}-${year} ${hour}:${minute}`;
 }
 
 function formatNewsTime(rawTime: string | null) {
@@ -117,14 +115,12 @@ function formatNewsTime(rawTime: string | null) {
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${day}-${month}-${year}, ${hour}:${minute}`;
 }
 
 function formatRatio(value: number | null, digits = 2) {
@@ -327,8 +323,9 @@ function statusTimestamp(chartData: StockChartData | null) {
   const timezone = chartData.timezone || (chartData.market === "TH" ? "Asia/Bangkok" : "America/New_York");
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: timezone,
-    month: "short",
+    month: "2-digit",
     day: "2-digit",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
@@ -337,12 +334,13 @@ function statusTimestamp(chartData: StockChartData | null) {
   }).formatToParts(new Date());
   const month = parts.find((part) => part.type === "month")?.value ?? "";
   const day = parts.find((part) => part.type === "day")?.value ?? "";
+  const year = parts.find((part) => part.type === "year")?.value ?? "";
   const hour = parts.find((part) => part.type === "hour")?.value ?? "";
   const minute = parts.find((part) => part.type === "minute")?.value ?? "";
   const second = parts.find((part) => part.type === "second")?.value ?? "";
   const dayPeriod = parts.find((part) => part.type === "dayPeriod")?.value?.toUpperCase() ?? "";
   const zone = parts.find((part) => part.type === "timeZoneName")?.value ?? timezone;
-  return `${month} ${day}, ${hour}:${minute}:${second} ${dayPeriod} ${zone}`;
+  return `${day}-${month}-${year} ${hour}:${minute}:${second} ${dayPeriod} ${zone}`;
 }
 
 export function StockSearchPanel({}: StockSearchPanelProps) {

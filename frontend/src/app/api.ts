@@ -98,6 +98,128 @@ export interface CreateStockPortfolioPayload {
   currency: string;
 }
 
+export interface MutualFundAccount {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  notes: string | null;
+  currency: string;
+}
+
+export interface CreateMutualFundAccountPayload {
+  bankName: string;
+  accountNumber: string;
+  notes?: string;
+  currency: string;
+}
+
+export interface CreateMutualFundPurchasePayload {
+  accountId: string;
+  fundName: string;
+  riskLevel: number;
+  averageCostPerUnit: number;
+  unitsPurchased: number;
+  purchaseDate: string;
+}
+
+export interface CreateMutualFundMonthlyLogPayload {
+  accountId: string;
+  fundName: string;
+  logDate: string;
+  pricePerUnit: number;
+  dividendReceived?: number | null;
+}
+
+export interface CreateMutualFundSalePayload {
+  accountId: string;
+  fundName: string;
+  saleDate: string;
+  unitsSold: number;
+  salePricePerUnit: number;
+}
+
+export interface MutualFundMonthlyLogView {
+  id: string;
+  logDate: string;
+  pricePerUnit: number;
+  marketValue: number;
+  dividendReceived: number;
+}
+
+export interface MutualFundPurchaseView {
+  id: string;
+  purchaseDate: string;
+  averageCostPerUnit: number;
+  unitsPurchased: number;
+  totalCost: number;
+  riskLevel: number;
+}
+
+export interface MutualFundHoldingView {
+  fundName: string;
+  riskLevel: number;
+  currency: string;
+  totalInvested: number;
+  currentValue: number;
+  dividends: number;
+  gainLoss: number;
+  gainLossPct: number;
+  purchases: MutualFundPurchaseView[];
+  monthlyLogs: MutualFundMonthlyLogView[];
+}
+
+export interface MutualFundAccountDetailView {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  notes: string | null;
+  currency: string;
+  funds: MutualFundHoldingView[];
+}
+
+export interface MutualFundSaleView {
+  id: string;
+  fundName: string;
+  saleDate: string;
+  unitsSold: number;
+  salePricePerUnit: number;
+  proceeds: number;
+  realizedGainLoss: number;
+}
+
+export interface MutualFundSaleAccountView {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  notes: string | null;
+  currency: string;
+  realizedGainLoss: number;
+  dividends: number;
+  totalGainLoss: number;
+  sales: MutualFundSaleView[];
+}
+
+export interface MutualFundAccountSummaryView {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  notes: string | null;
+  currency: string;
+  totalInvested: number;
+  currentValue: number;
+  dividends: number;
+  gainLoss: number;
+  gainLossPct: number;
+}
+
+export interface MutualFundDashboard {
+  summary: StockSummary;
+  accounts: MutualFundAccount[];
+  accountSummaries: MutualFundAccountSummaryView[];
+  accountDetails: MutualFundAccountDetailView[];
+  saleAccounts: MutualFundSaleAccountView[];
+}
+
 export interface StockLotView {
   id: string;
   purchaseDate: string;
@@ -477,6 +599,126 @@ export function createStockPortfolio(payload: CreateStockPortfolioPayload) {
   });
 }
 
+export function getMutualFundDashboard(bankName?: string | null, accountId?: string | null) {
+  const params = new URLSearchParams();
+  if (bankName && bankName !== "all") {
+    params.set("bankName", bankName);
+  }
+  if (accountId && accountId !== "all") {
+    params.set("accountId", accountId);
+  }
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return apiFetch<MutualFundDashboard>(`/api/mutual-funds/dashboard${suffix}`);
+}
+
+export function getMutualFundAccounts() {
+  return apiFetch<MutualFundAccount[]>("/api/mutual-funds/accounts");
+}
+
+export function createMutualFundAccount(payload: CreateMutualFundAccountPayload) {
+  return apiFetch<MutualFundAccount>("/api/mutual-funds/accounts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateMutualFundAccount(accountId: string, payload: CreateMutualFundAccountPayload) {
+  return apiFetch<MutualFundAccount>(`/api/mutual-funds/accounts/${encodeURIComponent(accountId)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMutualFundAccount(accountId: string) {
+  return apiFetch<void>(`/api/mutual-funds/accounts/${encodeURIComponent(accountId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function createMutualFundPurchase(payload: CreateMutualFundPurchasePayload) {
+  return apiFetch<void>("/api/mutual-funds/purchases", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateMutualFundPurchase(purchaseId: string, payload: CreateMutualFundPurchasePayload) {
+  return apiFetch<void>(`/api/mutual-funds/purchases/${encodeURIComponent(purchaseId)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMutualFundPurchase(purchaseId: string) {
+  return apiFetch<void>(`/api/mutual-funds/purchases/${encodeURIComponent(purchaseId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function createMutualFundMonthlyLog(payload: CreateMutualFundMonthlyLogPayload) {
+  return apiFetch<void>("/api/mutual-funds/monthly-logs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createMutualFundSale(payload: CreateMutualFundSalePayload) {
+  return apiFetch<void>("/api/mutual-funds/sales", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateMutualFundSale(saleId: string, payload: CreateMutualFundSalePayload) {
+  return apiFetch<void>(`/api/mutual-funds/sales/${encodeURIComponent(saleId)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMutualFundSale(saleId: string) {
+  return apiFetch<void>(`/api/mutual-funds/sales/${encodeURIComponent(saleId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function updateMutualFundMonthlyLog(logId: string, payload: CreateMutualFundMonthlyLogPayload) {
+  return apiFetch<void>(`/api/mutual-funds/monthly-logs/${encodeURIComponent(logId)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMutualFundMonthlyLog(logId: string) {
+  return apiFetch<void>(`/api/mutual-funds/monthly-logs/${encodeURIComponent(logId)}`, {
+    method: "DELETE",
+  });
+}
+
 export function deleteStockPortfolio(portfolioId: string) {
   return apiFetch<void>(`/api/stocks/portfolios/${encodeURIComponent(portfolioId)}`, {
     method: "DELETE",
@@ -582,6 +824,12 @@ export function updateStockTransaction(transactionId: string, payload: CreateSto
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+  });
+}
+
+export function deleteStockTransaction(transactionId: string) {
+  return apiFetch<void>(`/api/stocks/transactions/${encodeURIComponent(transactionId)}`, {
+    method: "DELETE",
   });
 }
 
