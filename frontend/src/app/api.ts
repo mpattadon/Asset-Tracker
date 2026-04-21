@@ -1,5 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const DEV_USER_ID = import.meta.env.VITE_DEV_USER_ID ?? "";
+const PREFERRED_CURRENCY_STORAGE_KEY = "asset-tracker.preferred-currency";
 
 export interface SummaryCard {
   label: string;
@@ -79,6 +80,10 @@ export interface StockSummary {
   totalChangePct: number;
   series: number[];
   candlesticks: Candlestick[];
+  intradayHistory: Candlestick[];
+  dailyHistory: Candlestick[];
+  performanceIntradayHistory: Candlestick[];
+  performanceDailyHistory: Candlestick[];
 }
 
 export interface StockPortfolio {
@@ -127,6 +132,10 @@ export interface StockTransactionView {
   symbol: string;
   name: string;
   market: string;
+  portfolioId: string;
+  portfolioName: string;
+  assetType: string;
+  exDate: string | null;
   currency: string;
   quantity: number | null;
   pricePerUnit: number | null;
@@ -286,8 +295,15 @@ export interface StockChartData {
   country: string | null;
   ceo: string | null;
   fullTimeEmployees: number | null;
+  beta: number | null;
   trailingPe: number | null;
+  forwardPe: number | null;
+  trailingEps: number | null;
+  forwardEps: number | null;
   dividendYield: number | null;
+  fiftyDayAverage: number | null;
+  twoHundredDayAverage: number | null;
+  sharesOutstanding: number | null;
   news: {
     title: string | null;
     publisher: string | null;
@@ -323,10 +339,69 @@ export interface StockChartData {
   dailyHistory: Candlestick[];
 }
 
+export interface StockChartDetails {
+  requestedSymbol: string;
+  normalizedSymbol: string;
+  market: string;
+  name: string;
+  type: string;
+  currency: string;
+  price: number;
+  dayChangePct: number;
+  exchange: string | null;
+  timezone: string | null;
+  previousClose: number | null;
+  openPrice: number | null;
+  dayHigh: number | null;
+  dayLow: number | null;
+  fiftyTwoWeekHigh: number | null;
+  fiftyTwoWeekLow: number | null;
+  volume: number | null;
+  averageVolume: number | null;
+  marketCap: number | null;
+  sector: string | null;
+  industry: string | null;
+  website: string | null;
+  longBusinessSummary: string | null;
+  headquarters: string | null;
+  country: string | null;
+  ceo: string | null;
+  fullTimeEmployees: number | null;
+  beta: number | null;
+  trailingPe: number | null;
+  forwardPe: number | null;
+  trailingEps: number | null;
+  forwardEps: number | null;
+  dividendYield: number | null;
+  fiftyDayAverage: number | null;
+  twoHundredDayAverage: number | null;
+  sharesOutstanding: number | null;
+  news: {
+    title: string | null;
+    publisher: string | null;
+    link: string | null;
+    publishedAt: string | null;
+    summary: string | null;
+  }[];
+  incomeStatement: StockChartData["incomeStatement"];
+  balanceSheet: StockChartData["balanceSheet"];
+  cashFlow: StockChartData["cashFlow"];
+}
+
+export interface StockChartHistory {
+  dailyHistory: Candlestick[];
+}
+
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers ?? {});
   if (DEV_USER_ID) {
     headers.set("X-User-Id", DEV_USER_ID);
+  }
+  if (typeof window !== "undefined") {
+    const preferredCurrency = window.localStorage.getItem(PREFERRED_CURRENCY_STORAGE_KEY);
+    if (preferredCurrency) {
+      headers.set("X-Preferred-Currency", preferredCurrency);
+    }
   }
 
   const response = await fetch(`${API_BASE}${path}`, {
@@ -430,7 +505,10 @@ export function getStockTransactions(market: string) {
   );
 }
 
-export function getPortfolioStockHoldings(portfolioId?: string, sortByDay = false) {
+export function getPortfolioStockHoldings(
+  portfolioId?: string,
+  sortByDay = false,
+) {
   const params = new URLSearchParams();
   if (portfolioId && portfolioId !== "all") {
     params.set("portfolioId", portfolioId);
@@ -490,6 +568,16 @@ export function addPortfolioStockTransaction(portfolioId: string, payload: Creat
   });
   return apiFetch<StockTransactionView>(`/api/stocks/transactions?${params.toString()}`, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateStockTransaction(transactionId: string, payload: CreateStockTransactionPayload) {
+  return apiFetch<StockTransactionView>(`/api/stocks/transactions/${encodeURIComponent(transactionId)}`, {
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
@@ -574,4 +662,20 @@ export function getStockChartData(symbol: string, market: string) {
     market,
   });
   return apiFetch<StockChartData>(`/api/stocks/chart-data?${params.toString()}`);
+}
+
+export function getStockChartDetails(symbol: string, market: string) {
+  const params = new URLSearchParams({
+    symbol,
+    market,
+  });
+  return apiFetch<StockChartDetails>(`/api/stocks/details?${params.toString()}`);
+}
+
+export function getStockChartHistory(symbol: string, market: string) {
+  const params = new URLSearchParams({
+    symbol,
+    market,
+  });
+  return apiFetch<StockChartHistory>(`/api/stocks/chart-history?${params.toString()}`);
 }

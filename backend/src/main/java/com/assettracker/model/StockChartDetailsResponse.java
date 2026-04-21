@@ -1,0 +1,47 @@
+package com.assettracker.model;
+
+import com.assettracker.service.MarketDataProvider;
+
+import java.util.List;
+
+public record StockChartDetailsResponse(String requestedSymbol,
+                                        String normalizedSymbol,
+                                        String market,
+                                        String name,
+                                        String type,
+                                        String currency,
+                                        double price,
+                                        double dayChangePct,
+                                        String exchange,
+                                        String timezone,
+                                        Double previousClose,
+                                        Double openPrice,
+                                        Double dayHigh,
+                                        Double dayLow,
+                                        Double fiftyTwoWeekHigh,
+                                        Double fiftyTwoWeekLow,
+                                        Double volume,
+                                        Double averageVolume,
+                                        Double marketCap,
+                                        String sector,
+                                        String industry,
+                                        String website,
+                                        String longBusinessSummary,
+                                        String headquarters,
+                                        String country,
+                                        String ceo,
+                                        Double fullTimeEmployees,
+                                        Double beta,
+                                        Double trailingPe,
+                                        Double forwardPe,
+                                        Double trailingEps,
+                                        Double forwardEps,
+                                        Double dividendYield,
+                                        Double fiftyDayAverage,
+                                        Double twoHundredDayAverage,
+                                        Double sharesOutstanding,
+                                        List<MarketDataProvider.NewsItem> news,
+                                        MarketDataProvider.FinancialStatement incomeStatement,
+                                        MarketDataProvider.FinancialStatement balanceSheet,
+                                        MarketDataProvider.FinancialStatement cashFlow) {
+}

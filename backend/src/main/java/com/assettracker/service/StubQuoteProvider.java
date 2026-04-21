@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
 import java.util.List;
+import java.time.LocalDate;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -80,8 +81,15 @@ public class StubQuoteProvider implements QuoteProvider, MarketDataProvider {
                 "United States",
                 "Jane Doe",
                 125_000d,
+                1.24,
                 34.19,
+                31.42,
+                7.15,
+                7.88,
                 0.0038,
+                result.price() * 0.97,
+                result.price() * 0.91,
+                15_500_000_000d,
                 List.of(
                         new NewsItem(
                                 "Example headline",
@@ -126,12 +134,13 @@ public class StubQuoteProvider implements QuoteProvider, MarketDataProvider {
                                        String period,
                                        String interval) {
         double base = lookup(user, symbol, market).map(QuoteResult::price).orElse(100d);
+        LocalDate start = LocalDate.of(2026, 4, 14);
         return List.of(
-                new HistoricalBar("P1", base * 0.95, base * 0.97, base * 0.94, base * 0.96),
-                new HistoricalBar("P2", base * 0.96, base * 0.98, base * 0.95, base * 0.97),
-                new HistoricalBar("P3", base * 0.97, base * 0.99, base * 0.96, base * 0.98),
-                new HistoricalBar("P4", base * 0.98, base, base * 0.97, base * 0.99),
-                new HistoricalBar("P5", base * 0.99, base * 1.01, base * 0.98, base)
+                new HistoricalBar(start.toString(), base * 0.95, base * 0.97, base * 0.94, base * 0.96),
+                new HistoricalBar(start.plusDays(1).toString(), base * 0.96, base * 0.98, base * 0.95, base * 0.97),
+                new HistoricalBar(start.plusDays(2).toString(), base * 0.97, base * 0.99, base * 0.96, base * 0.98),
+                new HistoricalBar(start.plusDays(3).toString(), base * 0.98, base, base * 0.97, base * 0.99),
+                new HistoricalBar(start.plusDays(4).toString(), base * 0.99, base * 1.01, base * 0.98, base)
         );
     }
 

@@ -2,6 +2,8 @@ package com.assettracker.service;
 
 import com.assettracker.config.AssetTrackerProperties;
 import com.assettracker.model.QuoteResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -25,9 +27,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 @Component
 public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(YfinanceSidecarMarketDataProvider.class);
+    private static final Pattern NON_STANDARD_NUMBER_PATTERN =
+            Pattern.compile("(?<=[:\\[,\\s])(?:NaN|-Infinity|Infinity)(?=[,\\]}\\s])");
 
     private final AssetTrackerProperties properties;
     private final ObjectMapper objectMapper;
@@ -113,14 +120,17 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
                     + "&period=" + encode(period == null ? "1d" : period)
                     + "&interval=" + encode(interval == null ? "5m" : interval));
             if (response.statusCode() == 404 || response.body().isBlank() || response.statusCode() < 200 || response.statusCode() >= 300) {
+                log.warn("Inspect fallback for {} {} because sidecar returned status {}", symbol, market, response.statusCode());
                 return inspectFallback(user, symbol, market, period, interval);
             }
             try {
-                return Optional.of(parseInspection(objectMapper.readTree(response.body()), symbol, market));
-            } catch (Exception ignored) {
+                return Optional.of(parseInspection(objectMapper.readTree(sanitizeJsonBody(response.body())), symbol, market));
+            } catch (Exception exception) {
+                log.warn("Inspect parse failed for {} {}. Falling back to sparse quote/history.", symbol, market, exception);
                 return inspectFallback(user, symbol, market, period, interval);
             }
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            log.warn("Inspect request failed for {} {}. Falling back to sparse quote/history.", symbol, market, exception);
             return inspectFallback(user, symbol, market, period, interval);
         }
     }
@@ -229,29 +239,11 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
     }
 
     private InspectionResult parseInspection(JsonNode node, String requestedSymbol, String requestedMarket) {
-        List<HistoricalBar> history = new ArrayList<>();
-        for (JsonNode barNode : node.path("history")) {
-            history.add(new HistoricalBar(
-                    barNode.path("time").asText(),
-                    barNode.path("open").asDouble(),
-                    barNode.path("high").asDouble(),
-                    barNode.path("low").asDouble(),
-                    barNode.path("close").asDouble()
-            ));
-        }
-        List<NewsItem> news = new ArrayList<>();
-        for (JsonNode newsNode : node.path("news")) {
-            news.add(new NewsItem(
-                    nullableText(newsNode.path("title")),
-                    nullableText(newsNode.path("publisher")),
-                    nullableText(newsNode.path("link")),
-                    nullableText(newsNode.path("publishedAt")),
-                    nullableText(newsNode.path("summary"))
-            ));
-        }
-        FinancialStatement incomeStatement = parseFinancialStatement(node.path("incomeStatement"), "Income Statement");
-        FinancialStatement balanceSheet = parseFinancialStatement(node.path("balanceSheet"), "Balance Sheet");
-        FinancialStatement cashFlow = parseFinancialStatement(node.path("cashFlow"), "Cash Flow");
+        List<HistoricalBar> history = parseHistorySafely(node.path("history"));
+        List<NewsItem> news = parseNewsSafely(node.path("news"));
+        FinancialStatement incomeStatement = parseFinancialStatementSafely(node.path("incomeStatement"), "Income Statement");
+        FinancialStatement balanceSheet = parseFinancialStatementSafely(node.path("balanceSheet"), "Balance Sheet");
+        FinancialStatement cashFlow = parseFinancialStatementSafely(node.path("cashFlow"), "Cash Flow");
 
         return new InspectionResult(
                 node.path("requestedSymbol").asText(requestedSymbol == null ? "" : requestedSymbol),
@@ -281,8 +273,15 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
                 nullableText(node.path("country")),
                 nullableText(node.path("ceo")),
                 nullableDouble(node.path("fullTimeEmployees")),
+                nullableDouble(node.path("beta")),
                 nullableDouble(node.path("trailingPe")),
+                nullableDouble(node.path("forwardPe")),
+                nullableDouble(node.path("trailingEps")),
+                nullableDouble(node.path("forwardEps")),
                 nullableDouble(node.path("dividendYield")),
+                nullableDouble(node.path("fiftyDayAverage")),
+                nullableDouble(node.path("twoHundredDayAverage")),
+                nullableDouble(node.path("sharesOutstanding")),
                 news,
                 incomeStatement,
                 balanceSheet,
@@ -291,10 +290,63 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
         );
     }
 
+    private List<HistoricalBar> parseHistorySafely(JsonNode node) {
+        List<HistoricalBar> history = new ArrayList<>();
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return history;
+        }
+        for (JsonNode barNode : node) {
+            try {
+                String time = nullableText(barNode.path("time"));
+                Double open = nullableDouble(barNode.path("open"));
+                Double high = nullableDouble(barNode.path("high"));
+                Double low = nullableDouble(barNode.path("low"));
+                Double close = nullableDouble(barNode.path("close"));
+                if (time == null || open == null || high == null || low == null || close == null) {
+                    continue;
+                }
+                history.add(new HistoricalBar(time, open, high, low, close));
+            } catch (Exception ignored) {
+            }
+        }
+        return history;
+    }
+
+    private List<NewsItem> parseNewsSafely(JsonNode node) {
+        List<NewsItem> news = new ArrayList<>();
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return news;
+        }
+        for (JsonNode newsNode : node) {
+            try {
+                news.add(new NewsItem(
+                        nullableText(newsNode.path("title")),
+                        nullableText(newsNode.path("publisher")),
+                        nullableText(newsNode.path("link")),
+                        nullableText(newsNode.path("publishedAt")),
+                        nullableText(newsNode.path("summary"))
+                ));
+            } catch (Exception ignored) {
+            }
+        }
+        return news;
+    }
+
+    private FinancialStatement parseFinancialStatementSafely(JsonNode node, String fallbackTitle) {
+        try {
+            return parseFinancialStatement(node, fallbackTitle);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private FinancialStatement parseFinancialStatement(JsonNode node, String fallbackTitle) {
         List<String> periods = new ArrayList<>();
         for (JsonNode periodNode : node.path("periods")) {
-            periods.add(periodNode.asText());
+            String period = nullableText(periodNode);
+            if (period != null) {
+                periods.add(period);
+            }
         }
         List<FinancialRow> rows = new ArrayList<>();
         for (JsonNode rowNode : node.path("rows")) {
@@ -302,10 +354,10 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
             for (JsonNode valueNode : rowNode.path("values")) {
                 values.add(nullableDouble(valueNode));
             }
-            rows.add(new FinancialRow(
-                    rowNode.path("label").asText(),
-                    values
-            ));
+            String label = nullableText(rowNode.path("label"));
+            if (label != null) {
+                rows.add(new FinancialRow(label, values));
+            }
         }
         if (periods.isEmpty() && rows.isEmpty()) {
             return null;
@@ -367,6 +419,14 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
                 bars.isEmpty() ? null : bars.get(bars.size() - 1).open(),
                 dayHigh,
                 dayLow,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -560,6 +620,13 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
         return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
     }
 
+    private String sanitizeJsonBody(String body) {
+        if (body == null || body.isBlank()) {
+            return body;
+        }
+        return NON_STANDARD_NUMBER_PATTERN.matcher(body).replaceAll("null");
+    }
+
     private String nullableText(JsonNode node) {
         return node == null || node.isMissingNode() || node.isNull() || node.asText().isBlank()
                 ? null
@@ -567,9 +634,28 @@ public class YfinanceSidecarMarketDataProvider implements MarketDataProvider {
     }
 
     private Double nullableDouble(JsonNode node) {
-        return node == null || node.isMissingNode() || node.isNull() || !node.isNumber()
-                ? null
-                : node.asDouble();
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return node.asDouble();
+        }
+        if (!node.isTextual()) {
+            return null;
+        }
+        String text = node.asText().trim();
+        if (text.isBlank()
+                || "NaN".equalsIgnoreCase(text)
+                || "Infinity".equalsIgnoreCase(text)
+                || "-Infinity".equalsIgnoreCase(text)
+                || "null".equalsIgnoreCase(text)) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(text);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private long parseEpochSeconds(String rawTime) {

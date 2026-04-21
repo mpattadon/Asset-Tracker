@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { Navigate, createBrowserRouter } from "react-router";
+import { AppRouteErrorBoundary } from "./components/AppRouteErrorBoundary";
 import { Layout } from "./components/Layout";
 import { TotalAssets } from "./pages/TotalAssets";
 import { Stocks } from "./pages/Stocks";
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
   {
     path: "/",
     Component: Layout,
+    ErrorBoundary: AppRouteErrorBoundary,
     children: [
       { index: true, Component: TotalAssets },
       { path: "stocks", Component: Stocks },

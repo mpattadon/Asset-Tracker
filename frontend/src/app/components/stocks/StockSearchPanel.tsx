@@ -1,11 +1,34 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Candlestick, getStockChartData, QuoteResult, searchStocks, StockChartData } from "../../api";
+import {
+  Candlestick,
+  getStockChartData,
+  getStockChartDetails,
+  getStockChartHistory,
+  QuoteResult,
+  searchStocks,
+  StockChartData,
+  StockChartDetails,
+} from "../../api";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card } from "../ui/card";
 import { Input } from "../ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { DataCard } from "../layout/index";
 import { HoverState as TradingViewHoverState, TradingViewChart } from "../charts/TradingViewChart";
+import {
+  aggregateCandles,
+  ChartResolution,
+  defaultResolutionForRange,
+  formatResolutionLabel,
+  resolutionOptionsForRange,
+} from "./chartResolution";
 
 type StockChartMode = "line" | "candlestick";
 type RangeKey = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "5Y" | "All";
@@ -121,6 +144,10 @@ function formatYield(value: number | null) {
   return `${(value * 100).toFixed(2)}%`;
 }
 
+function formatOptionalMoney(currency: string, amount: number | null, digits = 2) {
+  return amount == null || Number.isNaN(amount) ? "" : formatMoney(currency, amount, digits);
+}
+
 function canonicalSymbol(value: string | null | undefined) {
   if (!value) {
     return "";
@@ -180,7 +207,7 @@ function historyForRange(chartData: StockChartData | null, range: RangeKey) {
     return [];
   }
 
-  const useIntraday = range === "1D" || range === "5D" || range === "1M";
+  const useIntraday = range === "1D" || range === "5D";
   const source = useIntraday && chartData.intradayHistory.length
     ? chartData.intradayHistory
     : chartData.dailyHistory;
@@ -325,9 +352,14 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
   const [searchResultsExpanded, setSearchResultsExpanded] = useState(false);
   const [selectedQuote, setSelectedQuote] = useState<QuoteResult | null>(defaultQuote());
   const [selectedRange, setSelectedRange] = useState<RangeKey>("1D");
+  const [selectedResolution, setSelectedResolution] = useState<ChartResolution>(
+    defaultResolutionForRange("1D"),
+  );
   const [chartMode, setChartMode] = useState<StockChartMode>("candlestick");
   const [financialTab, setFinancialTab] = useState<FinancialTab>("income");
   const [loading, setLoading] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState("");
   const [chartData, setChartData] = useState<StockChartData | null>(null);
   const chartRequestId = useRef(0);
@@ -336,9 +368,61 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
   const hoverValuesRef = useRef<HTMLSpanElement | null>(null);
   const hoverRendererRef = useRef<(hoverState: TradingViewHoverState | null) => void>(() => {});
 
+  function mergeChartDetails(base: StockChartData, details: StockChartDetails): StockChartData {
+    return {
+      ...base,
+      ...details,
+      intradayHistory: base.intradayHistory,
+      dailyHistory: base.dailyHistory,
+    };
+  }
+
+  async function loadChartDetails(nextQuote: QuoteResult, requestId: number) {
+    setDetailsLoading(true);
+    try {
+      const details = await getStockChartDetails(nextQuote.symbol, nextQuote.market);
+      if (requestId !== chartRequestId.current) {
+        return;
+      }
+      setChartData((current) => (current ? mergeChartDetails(current, details) : current));
+      } catch {
+      // Keep the chart usable even if slower metadata calls fail.
+      } finally {
+        if (requestId === chartRequestId.current) {
+          setDetailsLoading(false);
+      }
+    }
+  }
+
+  async function loadExtendedHistory(nextQuote: QuoteResult, requestId: number) {
+    setHistoryLoading(true);
+    try {
+      const history = await getStockChartHistory(nextQuote.symbol, nextQuote.market);
+      if (requestId !== chartRequestId.current) {
+        return;
+      }
+      setChartData((current) =>
+        current
+          ? {
+              ...current,
+              dailyHistory: history.dailyHistory.length ? history.dailyHistory : current.dailyHistory,
+            }
+          : current,
+      );
+    } catch {
+      // Keep the fast 5D dataset if extended history is unavailable.
+    } finally {
+      if (requestId === chartRequestId.current) {
+        setHistoryLoading(false);
+      }
+    }
+  }
+
   async function loadChartData(nextQuote: QuoteResult) {
     const requestId = ++chartRequestId.current;
     setLoading(true);
+    setDetailsLoading(true);
+    setHistoryLoading(true);
     setError("");
     try {
       const result = await getStockChartData(nextQuote.symbol, nextQuote.market);
@@ -352,11 +436,15 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
       }
       setChartData(result);
       setFinancialTab("income");
+      void loadChartDetails(nextQuote, requestId);
+      void loadExtendedHistory(nextQuote, requestId);
     } catch (requestError) {
       if (requestId !== chartRequestId.current) {
         return;
       }
       setChartData(null);
+      setDetailsLoading(false);
+      setHistoryLoading(false);
       setError(
         requestError instanceof Error
           ? requestError.message
@@ -370,7 +458,7 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
   }
 
   useEffect(() => {
-    if (!query || query.trim().length < 2) {
+    if (!query || query.trim().length < 1) {
       setResults([]);
       setSearching(false);
       return;
@@ -399,7 +487,7 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
           setSearching(false);
         }
       }
-    }, 180);
+    }, 320);
 
     return () => {
       cancelled = true;
@@ -420,10 +508,25 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
     () => historyForRange(chartData, selectedRange),
     [chartData, selectedRange],
   );
-  const lineData = useMemo(() => toLineData(selectedHistory), [selectedHistory]);
+  const resolutionOptions = useMemo(
+    () => resolutionOptionsForRange(selectedRange),
+    [selectedRange],
+  );
+
+  useEffect(() => {
+    if (!resolutionOptions.includes(selectedResolution)) {
+      setSelectedResolution(defaultResolutionForRange(selectedRange));
+    }
+  }, [resolutionOptions, selectedRange, selectedResolution]);
+
+  const resolvedHistory = useMemo(
+    () => aggregateCandles(selectedHistory, selectedResolution),
+    [selectedHistory, selectedResolution],
+  );
+  const lineData = useMemo(() => toLineData(resolvedHistory), [resolvedHistory]);
   const currency = chartData?.currency ?? selectedQuote?.currency ?? "USD";
-  const latestClose = selectedHistory.at(-1)?.close ?? chartData?.price ?? 0;
-  const earliestClose = selectedHistory.at(0)?.close ?? latestClose;
+  const latestClose = resolvedHistory.at(-1)?.close ?? chartData?.price ?? 0;
+  const earliestClose = resolvedHistory.at(0)?.close ?? latestClose;
   const rangeChange = earliestClose === 0 ? 0 : ((latestClose - earliestClose) / earliestClose) * 100;
   const rangeAmountChange = latestClose - earliestClose;
   const dayAmountChange =
@@ -474,8 +577,15 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
     },
     { label: "Market Cap", value: chartData?.marketCap != null ? `${formatCompactNumber(chartData.marketCap)} ${currency}` : "" },
     { label: "Avg Volume", value: formatCompactNumber(chartData?.averageVolume ?? null) },
-    { label: "P/E Ratio", value: formatRatio(chartData?.trailingPe ?? null) },
+    { label: "P/E (TTM)", value: formatRatio(chartData?.trailingPe ?? null) },
+    { label: "P/E (Forward)", value: formatRatio(chartData?.forwardPe ?? null) },
+    { label: "EPS (TTM)", value: formatRatio(chartData?.trailingEps ?? null) },
+    { label: "EPS (Forward)", value: formatRatio(chartData?.forwardEps ?? null) },
     { label: "Dividend Yield", value: formatYield(chartData?.dividendYield ?? null) },
+    { label: "Beta", value: formatRatio(chartData?.beta ?? null, 3) },
+    { label: "50D Avg", value: formatOptionalMoney(currency, chartData?.fiftyDayAverage ?? null) },
+    { label: "200D Avg", value: formatOptionalMoney(currency, chartData?.twoHundredDayAverage ?? null) },
+    { label: "Shares Outstanding", value: formatCompactNumber(chartData?.sharesOutstanding ?? null) },
     { label: "Primary Exchange", value: chartData?.exchange ?? "" },
   ].filter((row) => row.value);
   const aboutRows = [
@@ -495,12 +605,6 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
 
   return (
     <div className="space-y-6">
-      <Card className="border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-        One query now loads cached intraday and daily bars for the selected ticker. Candle/line
-        switching and timeframe changes reuse the same loaded dataset locally, while the backend only
-        refreshes the missing tail of cached history for later lookups.
-      </Card>
-
       <DataCard title="Ticker Query" className="border-gray-200">
         <form
           className="grid gap-4 p-4 md:grid-cols-[minmax(0,2fr)_auto] md:items-end md:p-6"
@@ -668,6 +772,9 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
                 <p className="text-xs text-gray-500">
                   {`${statusTimestamp(chartData)} \u00b7 ${currency} \u00b7 ${chartData?.exchange ?? "Unknown exchange"}`}
                 </p>
+                {detailsLoading ? (
+                  <p className="text-xs text-gray-400">Loading company details...</p>
+                ) : null}
                 <p className="text-xs font-medium text-gray-700">
                   <span ref={hoverLabelRef} className="mr-3 text-gray-500" />
                   <span ref={hoverValuesRef} />
@@ -675,13 +782,13 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
               </div>
             </div>
 
-            {selectedHistory.length ? (
+            {resolvedHistory.length ? (
               <TradingViewChart
                 height={320}
                 mode={chartMode}
                 currency={currency}
                 lineData={lineData}
-                candlestickData={selectedHistory}
+                candlestickData={resolvedHistory}
                 onHoverChange={handleChartHover}
               />
             ) : (
@@ -721,6 +828,31 @@ export function StockSearchPanel({}: StockSearchPanelProps) {
                 >
                   Line
                 </Button>
+                <div className="ml-auto flex items-center gap-2">
+                  <span className="text-xs font-medium uppercase tracking-[0.14em] text-gray-500">
+                    Resolution
+                  </span>
+                  <Select
+                    value={selectedResolution}
+                    onValueChange={(value) => setSelectedResolution(value as ChartResolution)}
+                  >
+                    <SelectTrigger className="h-8 w-[96px] border-gray-200 bg-white text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {resolutionOptions.map((resolution) => (
+                        <SelectItem key={resolution} value={resolution}>
+                          {formatResolutionLabel(resolution)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {historyLoading ? (
+                  <span className="text-xs text-gray-500">
+                    Loading extended history...
+                  </span>
+                ) : null}
                 <span className="text-xs text-gray-500">
                   Cached datasets: 60d / 5m intraday and max / 1d daily
                 </span>

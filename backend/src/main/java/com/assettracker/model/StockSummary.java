@@ -12,6 +12,10 @@ public record StockSummary(
         double totalChange,
         double totalChangePct,
         List<Double> series,
-        List<StocksData.Candlestick> candlesticks
+        List<StocksData.Candlestick> candlesticks,
+        List<StocksData.Candlestick> intradayHistory,
+        List<StocksData.Candlestick> dailyHistory,
+        List<StocksData.Candlestick> performanceIntradayHistory,
+        List<StocksData.Candlestick> performanceDailyHistory
 ) {
 }

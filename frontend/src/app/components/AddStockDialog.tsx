@@ -33,6 +33,7 @@ import {
   searchStocks,
   StockTransactionView,
   StockPositionView,
+  updateStockTransaction,
 } from "../api";
 import { usePreferences } from "../preferences";
 
@@ -42,6 +43,7 @@ interface AddStockDialogProps {
   portfolioCurrency: string;
   holdings: StockPositionView[];
   transactions: StockTransactionView[];
+  editingTransaction?: StockTransactionView | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: (symbol: string) => Promise<void> | void;
@@ -81,7 +83,10 @@ function formatPreviewValue(value: number | null, decimals = 2) {
   });
 }
 
-function submitLabel(mode: TransactionMode) {
+function submitLabel(mode: TransactionMode, isEditing: boolean) {
+  if (isEditing) {
+    return "Save Changes";
+  }
   switch (mode) {
     case "BUY":
       return "Record Buy";
@@ -89,6 +94,17 @@ function submitLabel(mode: TransactionMode) {
       return "Record Sell";
     default:
       return "Record Dividend";
+  }
+}
+
+function transactionModeLabel(mode: TransactionMode) {
+  switch (mode) {
+    case "BUY":
+      return "Buy";
+    case "SELL":
+      return "Sell";
+    default:
+      return "Dividend";
   }
 }
 
@@ -102,6 +118,7 @@ export function AddStockDialog({
   portfolioCurrency,
   holdings,
   transactions,
+  editingTransaction = null,
   open,
   onOpenChange,
   onCreated,
@@ -130,15 +147,44 @@ export function AddStockDialog({
   const [searching, setSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const isEditing = Boolean(editingTransaction);
 
-  const selectedHolding = useMemo(
-    () => holdings.find((holding) => holding.symbol === selectedHoldingSymbol) ?? null,
-    [holdings, selectedHoldingSymbol],
-  );
+  const selectedHolding = useMemo(() => {
+    const matchedHolding = holdings.find((holding) => holding.symbol === selectedHoldingSymbol);
+    if (matchedHolding) {
+      return matchedHolding;
+    }
+    if (editingTransaction && editingTransaction.symbol === selectedHoldingSymbol) {
+      return {
+        symbol: editingTransaction.symbol,
+        name: editingTransaction.name,
+        market: editingTransaction.market,
+        type: editingTransaction.assetType,
+        currency: editingTransaction.currency,
+        price: editingTransaction.pricePerUnit ?? 0,
+        quantity: editingTransaction.quantity ?? editingTransaction.unitsEntitled ?? 0,
+        dayGain: 0,
+        dayChangePct: 0,
+        value: editingTransaction.totalUsd ?? editingTransaction.netDividend ?? 0,
+        totalChange: 0,
+        totalChangePct: 0,
+        lots: [],
+      } satisfies StockPositionView;
+    }
+    return null;
+  }, [editingTransaction, holdings, selectedHoldingSymbol]);
 
   const marketHoldings = useMemo(
     () => holdings.slice().sort((left, right) => left.symbol.localeCompare(right.symbol)),
     [holdings],
+  );
+
+  const previewTransactions = useMemo(
+    () =>
+      editingTransaction
+        ? transactions.filter((transaction) => transaction.id !== editingTransaction.id)
+        : transactions,
+    [editingTransaction, transactions],
   );
 
   const quantityNumber = useMemo(() => numberFromInput(quantity), [quantity]);
@@ -207,7 +253,7 @@ export function AddStockDialog({
     if (mode !== "DIVIDEND" || !selectedHolding) {
       return null;
     }
-    const unitsEntitled = transactions.reduce((sum, transaction) => {
+    const unitsEntitled = previewTransactions.reduce((sum, transaction) => {
       if (transaction.symbol !== selectedHolding.symbol || transaction.date > exDate) {
         return sum;
       }
@@ -227,40 +273,94 @@ export function AddStockDialog({
       withholdingAmount: roundValue(withholdingAmount),
       netDividend: roundValue(grossDividend - withholdingAmount),
     };
-  }, [dividendPerShareNumber, exDate, mode, selectedHolding, transactions, withholdingTaxRateNumber]);
+  }, [dividendPerShareNumber, exDate, mode, previewTransactions, selectedHolding, withholdingTaxRateNumber]);
 
   useEffect(() => {
     if (!open) {
       return;
     }
 
-    setMode("BUY");
-    setTicker("");
-    setResults([]);
-    setSelectedQuote(null);
-    setSearchResultsExpanded(true);
-    setSelectedHoldingSymbol("");
-    setQuantity(resetNumberValue());
-    setExDate(resetDateValue());
-    setTransactionDate(resetDateValue());
-    setPricePerUnit(resetNumberValue());
-    setFeeNetUsd(resetNumberValue());
-    setFeeNetThb(resetNumberValue());
-    setFeeNetLocal(resetNumberValue());
-    setFeeVatLocal(resetNumberValue());
-    setAtsFeeLocal(resetNumberValue());
-    setFxActualRate(resetNumberValue());
-    setFxDimeRate(resetNumberValue());
-    setDividendPerShare(resetNumberValue());
-    setWithholdingTaxRate("0.15");
-    setMarketLayout("US");
+    if (editingTransaction) {
+      const editingMode = editingTransaction.transactionType as TransactionMode;
+      setMode(editingMode);
+      setTicker(editingTransaction.symbol);
+      setResults([]);
+      setSelectedQuote(
+        editingMode === "BUY"
+          ? {
+              symbol: editingTransaction.symbol,
+              name: editingTransaction.name,
+              market: editingTransaction.market,
+              type: editingTransaction.assetType,
+              currency: editingTransaction.currency,
+              price: editingTransaction.pricePerUnit ?? 0,
+              dayChangePct: 0,
+            }
+          : null,
+      );
+      setSearchResultsExpanded(false);
+      setSelectedHoldingSymbol(editingTransaction.symbol);
+      setQuantity(editingTransaction.quantity == null ? resetNumberValue() : String(editingTransaction.quantity));
+      setExDate(editingTransaction.exDate ?? resetDateValue());
+      setTransactionDate(editingTransaction.date ?? resetDateValue());
+      setPricePerUnit(
+        editingTransaction.pricePerUnit == null ? resetNumberValue() : String(editingTransaction.pricePerUnit),
+      );
+      setFeeNetUsd(editingTransaction.feeNetUsd == null ? resetNumberValue() : String(editingTransaction.feeNetUsd));
+      setFeeNetThb(editingTransaction.feeNetThb == null ? resetNumberValue() : String(editingTransaction.feeNetThb));
+      setFeeNetLocal(
+        editingTransaction.feeNetLocal == null ? resetNumberValue() : String(editingTransaction.feeNetLocal),
+      );
+      setFeeVatLocal(
+        editingTransaction.feeVatLocal == null ? resetNumberValue() : String(editingTransaction.feeVatLocal),
+      );
+      setAtsFeeLocal(
+        editingTransaction.atsFeeLocal == null ? resetNumberValue() : String(editingTransaction.atsFeeLocal),
+      );
+      setFxActualRate(
+        editingTransaction.fxActualRate == null ? resetNumberValue() : String(editingTransaction.fxActualRate),
+      );
+      setFxDimeRate(
+        editingTransaction.fxDimeRate == null ? resetNumberValue() : String(editingTransaction.fxDimeRate),
+      );
+      setDividendPerShare(
+        editingTransaction.dividendPerShare == null
+          ? resetNumberValue()
+          : String(editingTransaction.dividendPerShare),
+      );
+      setWithholdingTaxRate(
+        editingTransaction.withholdingTaxRate == null ? "0.15" : String(editingTransaction.withholdingTaxRate),
+      );
+      setMarketLayout(detectLedgerLayout(editingTransaction.market));
+    } else {
+      setMode("BUY");
+      setTicker("");
+      setResults([]);
+      setSelectedQuote(null);
+      setSearchResultsExpanded(true);
+      setSelectedHoldingSymbol("");
+      setQuantity(resetNumberValue());
+      setExDate(resetDateValue());
+      setTransactionDate(resetDateValue());
+      setPricePerUnit(resetNumberValue());
+      setFeeNetUsd(resetNumberValue());
+      setFeeNetThb(resetNumberValue());
+      setFeeNetLocal(resetNumberValue());
+      setFeeVatLocal(resetNumberValue());
+      setAtsFeeLocal(resetNumberValue());
+      setFxActualRate(resetNumberValue());
+      setFxDimeRate(resetNumberValue());
+      setDividendPerShare(resetNumberValue());
+      setWithholdingTaxRate("0.15");
+      setMarketLayout("US");
+    }
     setSearching(false);
     setSubmitting(false);
     setError("");
-  }, [open]);
+  }, [editingTransaction, open]);
 
   useEffect(() => {
-    if (!open || mode !== "BUY") {
+    if (!open || mode !== "BUY" || isEditing) {
       return;
     }
 
@@ -299,9 +399,12 @@ export function AddStockDialog({
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [mode, open, ticker]);
+  }, [isEditing, mode, open, ticker]);
 
   useEffect(() => {
+    if (isEditing) {
+      return;
+    }
     setError("");
     setSubmitting(false);
     setTicker("");
@@ -322,7 +425,7 @@ export function AddStockDialog({
     setDividendPerShare(resetNumberValue());
     setWithholdingTaxRate("0.15");
     setMarketLayout("US");
-  }, [mode]);
+  }, [isEditing, mode]);
 
   useEffect(() => {
     const instrument = mode === "BUY" ? selectedQuote : selectedHolding;
@@ -390,9 +493,13 @@ export function AddStockDialog({
       if (!portfolioId) {
         throw new Error("Select a portfolio first.");
       }
-      await addPortfolioStockTransaction(portfolioId, payload);
-      await onCreated?.(instrument.symbol);
+      if (editingTransaction) {
+        await updateStockTransaction(editingTransaction.id, payload);
+      } else {
+        await addPortfolioStockTransaction(portfolioId, payload);
+      }
       onOpenChange(false);
+      void onCreated?.(instrument.symbol);
     } catch (requestError) {
       setError(
         requestError instanceof Error ? requestError.message : "Unable to record this transaction.",
@@ -406,117 +513,137 @@ export function AddStockDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[min(1600px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-hidden p-0 sm:max-w-[1600px]">
         <div className="max-h-[calc(100vh-2rem)] overflow-y-auto p-6">
-        <DialogHeader>
-          <DialogTitle>Record Stock Transaction</DialogTitle>
+          <DialogHeader>
+          <DialogTitle>{isEditing ? "Edit Stock Transaction" : "Record Stock Transaction"}</DialogTitle>
           <DialogDescription>
-            Record buys, sells, and dividends in {portfolioLabel}. The backend calculates FIFO lots,
-            remaining cost basis, realized P/L, and dividend totals from the ledger.
+            {isEditing
+              ? `Update the saved ${transactionModeLabel(mode).toLowerCase()} transaction in ${portfolioLabel}.`
+              : `Record buys, sells, and dividends in ${portfolioLabel}. The backend calculates FIFO lots, remaining cost basis, realized P/L, and dividend totals from the ledger.`}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <Tabs value={mode} onValueChange={(value) => setMode(value as TransactionMode)} className="space-y-4">
             <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="BUY">Buy</TabsTrigger>
-              <TabsTrigger value="SELL">Sell</TabsTrigger>
-              <TabsTrigger value="DIVIDEND">Dividend</TabsTrigger>
+              <TabsTrigger value="BUY" disabled={isEditing}>Buy</TabsTrigger>
+              <TabsTrigger value="SELL" disabled={isEditing}>Sell</TabsTrigger>
+              <TabsTrigger value="DIVIDEND" disabled={isEditing}>Dividend</TabsTrigger>
             </TabsList>
 
             <TabsContent value="BUY" className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ticker">Ticker Symbol</Label>
-                <Input
-                  id="ticker"
-                  placeholder="Search tickers"
-                  value={ticker}
-                  onChange={(e) => {
-                    setTicker(e.target.value);
-                    setSelectedQuote(null);
-                    setSearchResultsExpanded(true);
-                    setPricePerUnit("");
-                  }}
-                  required={mode === "BUY"}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label>Search Results</Label>
-                  <div className="flex items-center gap-3">
-                    {selectedQuote ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setSearchResultsExpanded(true);
-                          setSelectedQuote(null);
-                          setPricePerUnit("");
-                        }}
-                      >
-                        Change ticker
-                      </Button>
-                    ) : null}
-                    {searching ? <span className="text-xs text-muted-foreground">Searching...</span> : null}
+              {isEditing ? (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{selectedQuote?.name ?? editingTransaction?.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {selectedQuote?.symbol ?? editingTransaction?.symbol} · {selectedQuote?.currency ?? editingTransaction?.currency}
+                      </p>
+                    </div>
+                    <Badge variant="outline">{selectedQuote?.type ?? editingTransaction?.assetType}</Badge>
                   </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Ticker and transaction type stay fixed when editing an existing ledger row.
+                  </p>
                 </div>
-                {searchResultsExpanded ? (
-                  <div className="max-h-52 overflow-y-auto rounded-md border border-border bg-background">
-                    {results.length ? (
-                      <div className="divide-y divide-border">
-                        {results.map((result) => {
-                          const active =
-                            selectedQuote?.symbol === result.symbol &&
-                            selectedQuote?.market === result.market;
-                          return (
-                            <button
-                              key={`${result.market}:${result.symbol}`}
-                              type="button"
-                              className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors ${
-                                active ? "bg-blue-50" : "hover:bg-accent"
-                              }`}
-                              onClick={() => {
-                                setSelectedQuote(result);
-                                setPricePerUnit(String(result.price));
-                                setTicker(result.symbol);
-                                setMarketLayout(detectLedgerLayout(result.market));
-                                setSearchResultsExpanded(false);
-                              }}
-                            >
-                              <div>
-                                <p className="text-sm font-medium text-foreground">{result.name}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {result.symbol} · {result.type}
-                                </p>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-sm font-medium text-foreground">
-                                  {result.currency} {result.price.toFixed(2)}
-                                </p>
-                                <p
-                                  className={`text-xs ${
-                                    result.dayChangePct >= 0 ? "text-green-600" : "text-red-600"
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="ticker">Ticker Symbol</Label>
+                    <Input
+                      id="ticker"
+                      placeholder="Search tickers"
+                      value={ticker}
+                      onChange={(e) => {
+                        setTicker(e.target.value);
+                        setSelectedQuote(null);
+                        setSearchResultsExpanded(true);
+                        setPricePerUnit("");
+                      }}
+                      required={mode === "BUY"}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label>Search Results</Label>
+                      <div className="flex items-center gap-3">
+                        {selectedQuote ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSearchResultsExpanded(true);
+                              setSelectedQuote(null);
+                              setPricePerUnit("");
+                            }}
+                          >
+                            Change ticker
+                          </Button>
+                        ) : null}
+                        {searching ? <span className="text-xs text-muted-foreground">Searching...</span> : null}
+                      </div>
+                    </div>
+                    {searchResultsExpanded ? (
+                      <div className="max-h-52 overflow-y-auto rounded-md border border-border bg-background">
+                        {results.length ? (
+                          <div className="divide-y divide-border">
+                            {results.map((result) => {
+                              const active =
+                                selectedQuote?.symbol === result.symbol &&
+                                selectedQuote?.market === result.market;
+                              return (
+                                <button
+                                  key={`${result.market}:${result.symbol}`}
+                                  type="button"
+                                  className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors ${
+                                    active ? "bg-blue-50" : "hover:bg-accent"
                                   }`}
+                                  onClick={() => {
+                                    setSelectedQuote(result);
+                                    setPricePerUnit(String(result.price));
+                                    setTicker(result.symbol);
+                                    setMarketLayout(detectLedgerLayout(result.market));
+                                    setSearchResultsExpanded(false);
+                                  }}
                                 >
-                                  {result.dayChangePct >= 0 ? "+" : ""}
-                                  {result.dayChangePct.toFixed(2)}%
-                                </p>
-                              </div>
-                            </button>
-                          );
-                        })}
+                                  <div>
+                                    <p className="text-sm font-medium text-foreground">{result.name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {result.symbol} · {result.type}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-sm font-medium text-foreground">
+                                      {result.currency} {result.price.toFixed(2)}
+                                    </p>
+                                    <p
+                                      className={`text-xs ${
+                                        result.dayChangePct >= 0 ? "text-green-600" : "text-red-600"
+                                      }`}
+                                    >
+                                      {result.dayChangePct >= 0 ? "+" : ""}
+                                      {result.dayChangePct.toFixed(2)}%
+                                    </p>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="px-4 py-6 text-sm text-muted-foreground">
+                            {ticker.trim().length < 2 ? "Start typing to search." : "No matches found."}
+                          </div>
+                        )}
                       </div>
                     ) : (
-                      <div className="px-4 py-6 text-sm text-muted-foreground">
-                        {ticker.trim().length < 2 ? "Start typing to search." : "No matches found."}
+                      <div className="rounded-md border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+                        Search results collapsed after selection.
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div className="rounded-md border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-                    Search results collapsed after selection.
-                  </div>
-                )}
-              </div>
-              {selectedQuote ? (
+                </>
+              )}
+              {selectedQuote && !isEditing ? (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -534,7 +661,7 @@ export function AddStockDialog({
             <TabsContent value="SELL" className="space-y-4">
               <div className="space-y-2">
                 <Label>Open Position</Label>
-                <Select value={selectedHoldingSymbol} onValueChange={setSelectedHoldingSymbol}>
+                <Select value={selectedHoldingSymbol} onValueChange={setSelectedHoldingSymbol} disabled={isEditing}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choose a holding to sell" />
                   </SelectTrigger>
@@ -557,7 +684,7 @@ export function AddStockDialog({
             <TabsContent value="DIVIDEND" className="space-y-4">
               <div className="space-y-2">
                 <Label>Dividend Position</Label>
-                <Select value={selectedHoldingSymbol} onValueChange={setSelectedHoldingSymbol}>
+                <Select value={selectedHoldingSymbol} onValueChange={setSelectedHoldingSymbol} disabled={isEditing}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choose a holding for the dividend" />
                   </SelectTrigger>
@@ -599,8 +726,8 @@ export function AddStockDialog({
               <Label>Ledger Layout</Label>
               <Tabs value={marketLayout} onValueChange={(value) => setMarketLayout(value as MarketLedgerLayout)}>
                 <TabsList>
-                  <TabsTrigger value="US">Foreign Market</TabsTrigger>
-                  <TabsTrigger value="TH">Local Market</TabsTrigger>
+                  <TabsTrigger value="US" disabled={isEditing}>Foreign Market</TabsTrigger>
+                  <TabsTrigger value="TH" disabled={isEditing}>Local Market</TabsTrigger>
                 </TabsList>
               </Tabs>
             </div>
@@ -1025,7 +1152,7 @@ export function AddStockDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={!canSubmit || submitting}>
-              {submitting ? "Saving..." : submitLabel(mode)}
+              {submitting ? "Saving..." : submitLabel(mode, isEditing)}
             </Button>
           </div>
           {error ? <p className="text-sm text-red-600">{error}</p> : null}

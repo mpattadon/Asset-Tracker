@@ -4,6 +4,8 @@ import com.assettracker.model.AddHoldingRequest;
 import com.assettracker.model.CreateStockPortfolioRequest;
 import com.assettracker.model.QuoteResult;
 import com.assettracker.model.StockChartDataResponse;
+import com.assettracker.model.StockChartDetailsResponse;
+import com.assettracker.model.StockChartHistoryResponse;
 import com.assettracker.model.StockPortfolioView;
 import com.assettracker.model.StockPositionView;
 import com.assettracker.model.StockSummary;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -87,17 +90,19 @@ public class StockController {
     @GetMapping("/holdings")
     public List<StockPositionView> portfolioHoldings(HttpServletRequest request,
                                                      @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                                     @RequestHeader(value = "X-Preferred-Currency", required = false) String preferredCurrency,
                                                      @RequestParam(name = "portfolioId", required = false) String portfolioId,
                                                      @RequestParam(name = "sort", required = false) String sort) {
         boolean sortByDayChange = "dayChangePct".equalsIgnoreCase(sort);
-        return stockPortfolioService.getPortfolioHoldings(request, userId, portfolioId, sortByDayChange);
+        return stockPortfolioService.getPortfolioHoldings(request, userId, portfolioId, preferredCurrency, sortByDayChange);
     }
 
     @GetMapping("/summary")
     public StockSummary portfolioSummary(HttpServletRequest request,
                                          @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                         @RequestHeader(value = "X-Preferred-Currency", required = false) String preferredCurrency,
                                          @RequestParam(name = "portfolioId", required = false) String portfolioId) {
-        return stockPortfolioService.portfolioSummary(request, userId, portfolioId);
+        return stockPortfolioService.portfolioSummary(request, userId, portfolioId, preferredCurrency);
     }
 
     @GetMapping("/transactions")
@@ -113,6 +118,14 @@ public class StockController {
                                                         @RequestParam(name = "portfolioId", required = false) String portfolioId,
                                                         @Valid @RequestBody StockTransactionRequest transactionRequest) {
         return stockPortfolioService.addPortfolioTransaction(request, userId, portfolioId, transactionRequest);
+    }
+
+    @PutMapping("/transactions/{transactionId}")
+    public StockTransactionView updatePortfolioTransaction(HttpServletRequest request,
+                                                           @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                                           @PathVariable String transactionId,
+                                                           @Valid @RequestBody StockTransactionRequest transactionRequest) {
+        return stockPortfolioService.updatePortfolioTransaction(request, userId, transactionId, transactionRequest);
     }
 
     @PostMapping("/markets/{market}/holdings")
@@ -173,56 +186,175 @@ public class StockController {
                                             @RequestParam String symbol,
                                             @RequestParam(required = false) String market) {
         PortfolioMetadataRepository.UserRecord user = currentUserService.resolveOptionalUser(request, userId).orElse(null);
-        MarketDataProvider.InspectionResult inspection = resolveInspection(user, symbol, market, "5d", "1d")
+        QuoteResult quote = resolveQuote(user, symbol, market)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticker not found"));
+        String resolvedSymbol = quote.symbol();
+        String resolvedMarket = quote.market();
         CompletableFuture<List<MarketDataProvider.HistoricalBar>> intradayFuture = CompletableFuture.supplyAsync(
-                () -> marketDataProvider.history(user, inspection.requestedSymbol(), inspection.market(), "60d", "5m")
+                () -> marketDataProvider.history(user, resolvedSymbol, resolvedMarket, "5d", "5m")
         );
         CompletableFuture<List<MarketDataProvider.HistoricalBar>> dailyFuture = CompletableFuture.supplyAsync(
-                () -> marketDataProvider.history(user, inspection.requestedSymbol(), inspection.market(), "max", "1d")
+                () -> marketDataProvider.history(user, resolvedSymbol, resolvedMarket, "5d", "1d")
         );
 
         try {
+            List<MarketDataProvider.HistoricalBar> intradayHistory = intradayFuture.join();
+            List<MarketDataProvider.HistoricalBar> dailyHistory = dailyFuture.join();
+            MarketDataProvider.HistoricalBar latestBar = !intradayHistory.isEmpty()
+                    ? intradayHistory.get(intradayHistory.size() - 1)
+                    : !dailyHistory.isEmpty() ? dailyHistory.get(dailyHistory.size() - 1) : null;
+            Double previousClose = dailyHistory.size() >= 2
+                    ? dailyHistory.get(dailyHistory.size() - 2).close()
+                    : intradayHistory.size() >= 2 ? intradayHistory.get(intradayHistory.size() - 2).close() : null;
             return new StockChartDataResponse(
-                    inspection.requestedSymbol(),
-                    inspection.normalizedSymbol(),
-                    inspection.market(),
-                    inspection.name(),
-                    inspection.type(),
-                    inspection.currency(),
-                    inspection.price(),
-                    inspection.dayChangePct(),
-                    inspection.exchange(),
-                    inspection.timezone(),
-                    inspection.previousClose(),
-                    inspection.openPrice(),
-                    inspection.dayHigh(),
-                    inspection.dayLow(),
-                    inspection.fiftyTwoWeekHigh(),
-                    inspection.fiftyTwoWeekLow(),
-                    inspection.volume(),
-                    inspection.averageVolume(),
-                    inspection.marketCap(),
-                    inspection.sector(),
-                    inspection.industry(),
-                    inspection.website(),
-                    inspection.longBusinessSummary(),
-                    inspection.headquarters(),
-                    inspection.country(),
-                    inspection.ceo(),
-                    inspection.fullTimeEmployees(),
-                    inspection.trailingPe(),
-                    inspection.dividendYield(),
-                    inspection.news(),
-                    inspection.incomeStatement(),
-                    inspection.balanceSheet(),
-                    inspection.cashFlow(),
-                    intradayFuture.join(),
-                    dailyFuture.join()
+                    symbol.trim().toUpperCase(Locale.ROOT),
+                    resolvedSymbol,
+                    resolvedMarket,
+                    quote.name(),
+                    quote.type(),
+                    quote.currency(),
+                    quote.price(),
+                    quote.dayChangePct(),
+                    null,
+                    null,
+                    previousClose,
+                    latestBar == null ? null : latestBar.open(),
+                    latestBar == null ? null : latestBar.high(),
+                    latestBar == null ? null : latestBar.low(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    null,
+                    null,
+                    null,
+                    intradayHistory,
+                    dailyHistory
             );
         } catch (CompletionException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Unable to load chart data", exception);
         }
+    }
+
+    @GetMapping("/chart-history")
+    public StockChartHistoryResponse chartHistory(HttpServletRequest request,
+                                                  @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                                  @RequestParam String symbol,
+                                                  @RequestParam(required = false) String market) {
+        PortfolioMetadataRepository.UserRecord user = currentUserService.resolveOptionalUser(request, userId).orElse(null);
+        QuoteResult quote = resolveQuote(user, symbol, market)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticker not found"));
+        return new StockChartHistoryResponse(
+                marketDataProvider.history(user, quote.symbol(), quote.market(), "max", "1d")
+        );
+    }
+
+    @GetMapping("/details")
+    public StockChartDetailsResponse chartDetails(HttpServletRequest request,
+                                                  @RequestHeader(value = "X-User-Id", required = false) String userId,
+                                                  @RequestParam String symbol,
+                                                  @RequestParam(required = false) String market) {
+        PortfolioMetadataRepository.UserRecord user = currentUserService.resolveOptionalUser(request, userId).orElse(null);
+        QuoteResult quote = resolveQuote(user, symbol, market)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticker not found"));
+        MarketDataProvider.InspectionResult inspection = marketDataProvider.inspect(user, quote.symbol(), quote.market(), "5d", "1d")
+                .orElseGet(() -> new MarketDataProvider.InspectionResult(
+                        symbol.trim().toUpperCase(Locale.ROOT),
+                        quote.symbol(),
+                        quote.market(),
+                        quote.name(),
+                        quote.type(),
+                        quote.currency(),
+                        quote.price(),
+                        quote.dayChangePct(),
+                        null, // exchange
+                        null, // timezone
+                        null, // previousClose
+                        null, // openPrice
+                        null, // dayHigh
+                        null, // dayLow
+                        null, // fiftyTwoWeekHigh
+                        null, // fiftyTwoWeekLow
+                        null, // volume
+                        null, // averageVolume
+                        null, // marketCap
+                        null, // sector
+                        null, // industry
+                        null, // website
+                        null, // longBusinessSummary
+                        null, // headquarters
+                        null, // country
+                        null, // ceo
+                        null, // fullTimeEmployees
+                        null, // beta
+                        null, // trailingPe
+                        null, // forwardPe
+                        null, // trailingEps
+                        null, // forwardEps
+                        null, // dividendYield
+                        null, // fiftyDayAverage
+                        null, // twoHundredDayAverage
+                        null, // sharesOutstanding
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        List.of()
+                ));
+        return new StockChartDetailsResponse(
+                inspection.requestedSymbol(),
+                inspection.normalizedSymbol(),
+                inspection.market(),
+                inspection.name(),
+                inspection.type(),
+                inspection.currency(),
+                inspection.price(),
+                inspection.dayChangePct(),
+                inspection.exchange(),
+                inspection.timezone(),
+                inspection.previousClose(),
+                inspection.openPrice(),
+                inspection.dayHigh(),
+                inspection.dayLow(),
+                inspection.fiftyTwoWeekHigh(),
+                inspection.fiftyTwoWeekLow(),
+                inspection.volume(),
+                inspection.averageVolume(),
+                inspection.marketCap(),
+                inspection.sector(),
+                inspection.industry(),
+                inspection.website(),
+                inspection.longBusinessSummary(),
+                inspection.headquarters(),
+                inspection.country(),
+                inspection.ceo(),
+                inspection.fullTimeEmployees(),
+                inspection.beta(),
+                inspection.trailingPe(),
+                inspection.forwardPe(),
+                inspection.trailingEps(),
+                inspection.forwardEps(),
+                inspection.dividendYield(),
+                inspection.fiftyDayAverage(),
+                inspection.twoHundredDayAverage(),
+                inspection.sharesOutstanding(),
+                inspection.news(),
+                inspection.incomeStatement(),
+                inspection.balanceSheet(),
+                inspection.cashFlow()
+        );
     }
 
     private Optional<MarketDataProvider.InspectionResult> resolveInspection(PortfolioMetadataRepository.UserRecord user,
@@ -257,6 +389,30 @@ public class StockController {
                     .findFirst();
             if (resolved.isPresent()) {
                 return resolved;
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<QuoteResult> resolveQuote(PortfolioMetadataRepository.UserRecord user,
+                                               String symbol,
+                                               String market) {
+        Optional<QuoteResult> direct = quoteProvider.lookup(user, symbol, market);
+        if (direct.isPresent()) {
+            return direct;
+        }
+
+        for (String queryVariant : queryVariants(symbol)) {
+            Optional<QuoteResult> candidate = quoteProvider.search(user, queryVariant, market, List.of()).stream()
+                    .filter(result -> market == null || market.isBlank() || market.equalsIgnoreCase(result.market()))
+                    .sorted((left, right) -> Integer.compare(
+                            scoreCandidate(right, symbol, market),
+                            scoreCandidate(left, symbol, market)
+                    ))
+                    .findFirst();
+            if (candidate.isPresent()) {
+                return candidate;
             }
         }
 

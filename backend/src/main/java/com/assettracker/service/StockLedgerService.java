@@ -20,16 +20,19 @@ import java.sql.Date;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeSet;
 import java.util.UUID;
 
 @Service
@@ -105,10 +108,14 @@ public class StockLedgerService {
 
     public List<StockPositionView> getHoldingsByPortfolio(PortfolioMetadataRepository.UserRecord user,
                                                           String portfolioId,
+                                                          String preferredCurrency,
                                                           boolean sortByDayChange) {
         PortfolioAccount selectedAccount = requirePortfolioSelection(user, portfolioId);
         DerivedLedger ledger = deriveLedgerForPortfolio(user, selectedAccount == null ? null : selectedAccount.id(), null);
         List<StockPositionView> positions = new ArrayList<>();
+        String targetCurrency = selectedAccount != null && selectedAccount.currency() != null && !selectedAccount.currency().isBlank()
+                ? selectedAccount.currency()
+                : normalizeCurrencyCode(preferredCurrency);
 
         for (InstrumentState state : ledger.instrumentStates.values()) {
             if (state.openUnits() <= EPSILON) {
@@ -127,21 +134,25 @@ public class StockLedgerService {
                             0
                     ));
 
-            double value = quote.price() * state.openUnits();
+            String displayCurrency = targetCurrency == null ? state.currency() : targetCurrency;
+            double conversionRate = conversionRate(user, quote.currency(), displayCurrency);
+            double displayPrice = quote.price() * conversionRate;
+            double investedAmount = state.investedAmount() * conversionRate;
+            double value = displayPrice * state.openUnits();
             double dayGain = value * (quote.dayChangePct() / 100d);
-            double totalChange = value - state.investedAmount();
+            double totalChange = value - investedAmount;
 
             List<StockLotView> lots = state.openLots().stream()
                     .sorted(Comparator.comparing(OpenLot::date).reversed())
                     .map(lot -> new StockLotView(
                             lot.id().toString(),
                             lot.date().toString(),
-                            roundMoney(lot.costPerUnit()),
+                            roundMoney(lot.costPerUnit() * conversionRate),
                             roundUnits(lot.remainingUnits()),
-                            quote.price(),
-                            valueForUnits(quote.price(), lot.remainingUnits()) * (quote.dayChangePct() / 100d),
+                            displayPrice,
+                            valueForUnits(displayPrice, lot.remainingUnits()) * (quote.dayChangePct() / 100d),
                             quote.dayChangePct(),
-                            valueForUnits(quote.price(), lot.remainingUnits())
+                            valueForUnits(displayPrice, lot.remainingUnits())
                     ))
                     .toList();
 
@@ -150,14 +161,14 @@ public class StockLedgerService {
                     state.name(),
                     marketDisplay(marketCode),
                     state.assetType(),
-                    state.currency(),
-                    quote.price(),
+                    displayCurrency,
+                    displayPrice,
                     roundUnits(state.openUnits()),
                     dayGain,
                     quote.dayChangePct(),
                     value,
                     totalChange,
-                    state.investedAmount() <= EPSILON ? 0 : (totalChange / state.investedAmount()) * 100d,
+                    investedAmount <= EPSILON ? 0 : (totalChange / investedAmount) * 100d,
                     lots
             ));
         }
@@ -172,19 +183,50 @@ public class StockLedgerService {
                 .toList();
     }
 
-    public StockSummary getSummaryByPortfolio(PortfolioMetadataRepository.UserRecord user, String portfolioId) {
+    public StockSummary getSummaryByPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                              String portfolioId,
+                                              String preferredCurrency) {
         PortfolioAccount selectedAccount = requirePortfolioSelection(user, portfolioId);
-        List<StockPositionView> positions = getHoldingsByPortfolio(user, portfolioId, false);
-        String currency = summaryCurrency(selectedAccount, positions);
-        double totalValue = positions.stream().mapToDouble(StockPositionView::value).sum();
-        double dayChange = positions.stream().mapToDouble(StockPositionView::dayGain).sum();
+        String requestedCurrency = normalizeCurrencyCode(preferredCurrency);
+        List<StockPositionView> positions = getHoldingsByPortfolio(user, portfolioId, requestedCurrency, false);
+        String currency = summaryCurrency(selectedAccount, positions, requestedCurrency);
+        HistoricalSeriesData intradaySeries = buildPortfolioSeries(
+                user,
+                selectedAccount == null ? null : selectedAccount.id(),
+                currency,
+                "5d",
+                "5m"
+        );
+        HistoricalSeriesData dailySeries = buildPortfolioSeries(
+                user,
+                selectedAccount == null ? null : selectedAccount.id(),
+                currency,
+                "max",
+                "1d"
+        );
+
+        List<StocksData.Candlestick> intradayHistory = intradaySeries.valueBars();
+        List<StocksData.Candlestick> dailyHistory = dailySeries.valueBars();
+        List<StocksData.Candlestick> performanceIntradayHistory = intradaySeries.performanceBars();
+        List<StocksData.Candlestick> performanceDailyHistory = dailySeries.performanceBars();
+        List<StocksData.Candlestick> candles = !dailyHistory.isEmpty() ? dailyHistory : intradayHistory;
+
+        double totalValue = !intradayHistory.isEmpty()
+                ? intradayHistory.get(intradayHistory.size() - 1).close()
+                : !dailyHistory.isEmpty()
+                ? dailyHistory.get(dailyHistory.size() - 1).close()
+                : positions.stream().mapToDouble(StockPositionView::value).sum();
         double totalChange = positions.stream().mapToDouble(StockPositionView::totalChange).sum();
         double totalCost = positions.stream().mapToDouble(position -> position.value() - position.totalChange()).sum();
-        List<StocksData.Candlestick> candles = buildPortfolioCandles(user, positions);
+        double dayChange = latestDayChange(dailyHistory, totalValue);
         List<Double> series = candles.stream().map(StocksData.Candlestick::close).toList();
         if (series.isEmpty()) {
             series = syntheticSeries(totalValue);
             candles = syntheticCandles(series);
+            dailyHistory = candles;
+            intradayHistory = List.of();
+            performanceDailyHistory = syntheticPerformanceCandles(candles, totalCost);
+            performanceIntradayHistory = List.of();
         }
         return new StockSummary(
                 selectedAccount == null ? "all" : selectedAccount.id().toString(),
@@ -196,7 +238,11 @@ public class StockLedgerService {
                 totalChange,
                 totalCost == 0 ? 0 : (totalChange / totalCost) * 100d,
                 series,
-                candles
+                candles,
+                intradayHistory,
+                dailyHistory,
+                performanceIntradayHistory,
+                performanceDailyHistory
         );
     }
 
@@ -334,6 +380,172 @@ public class StockLedgerService {
                 ));
     }
 
+    @Transactional
+    public StockTransactionView updateTransaction(PortfolioMetadataRepository.UserRecord user,
+                                                  String transactionId,
+                                                  StockTransactionRequest request) {
+        LedgerEntry existing = requireExistingTransaction(user, transactionId);
+        String transactionType = normalizeTransactionType(request.transactionType());
+        String marketCode = normalizeMarketCode(request.market());
+
+        if (!existing.transactionType().equals(transactionType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Transaction type cannot be changed");
+        }
+        if (!existing.symbol().equalsIgnoreCase(request.symbol())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ticker cannot be changed");
+        }
+        if (!existing.marketCode().equals(marketCode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Market cannot be changed");
+        }
+
+        validateRequest(transactionType, marketCode, request);
+
+        UUID accountId = existing.accountId();
+        LocalDate transactionDate = request.transactionDate();
+
+        if ("SELL".equals(transactionType)) {
+            double availableUnits = openUnitsOnOrBeforeInPortfolioExcludingTransaction(
+                    user,
+                    accountId,
+                    request.symbol(),
+                    transactionDate,
+                    existing.id()
+            );
+            double quantity = defaultNumber(request.quantity());
+            if (quantity > availableUnits + EPSILON) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Sell quantity exceeds open units for " + request.symbol()
+                );
+            }
+        }
+
+        double unitsEntitled = 0;
+        if ("DIVIDEND".equals(transactionType)) {
+            LocalDate entitlementDate = request.exDate() == null ? transactionDate : request.exDate();
+            unitsEntitled = openUnitsOnOrBeforeInPortfolioExcludingTransaction(
+                    user,
+                    accountId,
+                    request.symbol(),
+                    entitlementDate,
+                    existing.id()
+            );
+            if (unitsEntitled <= EPSILON) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "No open units entitled to dividend for " + request.symbol()
+                );
+            }
+        }
+
+        String currencyId = referenceDataService.currencyId(request.currency()).toString();
+        double quantity = defaultNumber(request.quantity());
+        double pricePerUnit = defaultNumber(request.pricePerUnit());
+        double grossAmount = "DIVIDEND".equals(transactionType)
+                ? roundMoney(unitsEntitled * defaultNumber(request.dividendPerShare()))
+                : roundMoney(quantity * pricePerUnit);
+
+        jdbcTemplate.update("""
+                UPDATE transactions
+                SET trade_date = ?,
+                    settlement_date = ?,
+                    payment_date = ?,
+                    ex_date = ?,
+                    units = ?,
+                    price_per_unit = ?,
+                    gross_amount = ?,
+                    gross_currency_id = ?,
+                    exchange_rate_to_account = ?,
+                    exchange_rate_to_base = ?,
+                    source_ref = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND user_id = ?
+                """,
+                "DIVIDEND".equals(transactionType) ? null : Date.valueOf(transactionDate),
+                "DIVIDEND".equals(transactionType) ? null : Date.valueOf(transactionDate),
+                "DIVIDEND".equals(transactionType) ? Date.valueOf(transactionDate) : null,
+                "DIVIDEND".equals(transactionType) && request.exDate() != null ? Date.valueOf(request.exDate()) : null,
+                quantityOrNull(transactionType, quantity),
+                numberOrNull(transactionType, pricePerUnit),
+                grossAmount,
+                currencyId,
+                request.fxActualRate(),
+                request.fxDimeRate(),
+                request.symbol().toUpperCase(Locale.ROOT) + ":" + transactionType + ":" + transactionDate,
+                existing.id().toString(),
+                id(user.id())
+        );
+
+        jdbcTemplate.update("""
+                UPDATE stock_transaction_details
+                SET fee_net_usd = ?,
+                    fee_net_thb = ?,
+                    fee_net_local = ?,
+                    fee_vat_local = ?,
+                    ats_fee_local = ?,
+                    fx_actual_rate = ?,
+                    fx_dime_rate = ?,
+                    withholding_tax_rate = ?
+                WHERE transaction_id = ?
+                """,
+                defaultNumber(request.feeNetUsd()),
+                defaultNumber(request.feeNetThb()),
+                defaultNumber(request.feeNetLocal()),
+                defaultNumber(request.feeVatLocal()),
+                defaultNumber(request.atsFeeLocal()),
+                request.fxActualRate(),
+                request.fxDimeRate(),
+                request.withholdingTaxRate(),
+                existing.id().toString()
+        );
+
+        if ("DIVIDEND".equals(transactionType)) {
+            double dividendPerShare = defaultNumber(request.dividendPerShare());
+            double grossDividend = roundMoney(unitsEntitled * dividendPerShare);
+            double withholdingTaxRate = defaultNumber(request.withholdingTaxRate());
+            double withholdingTaxAmount = roundMoney(grossDividend * withholdingTaxRate);
+            double netDividend = roundMoney(grossDividend - withholdingTaxAmount);
+            jdbcTemplate.update("""
+                    UPDATE cash_flows
+                    SET cash_flow_type = ?,
+                        gross_amount = ?,
+                        gross_currency_id = ?,
+                        tax_amount = ?,
+                        tax_currency_id = ?,
+                        net_amount = ?,
+                        net_currency_id = ?,
+                        units_entitled = ?,
+                        amount_per_unit = ?,
+                        tax_already_deducted = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE transaction_id = ?
+                    """,
+                    "DIVIDEND",
+                    grossDividend,
+                    currencyId,
+                    withholdingTaxAmount,
+                    currencyId,
+                    netDividend,
+                    currencyId,
+                    unitsEntitled,
+                    dividendPerShare,
+                    withholdingTaxAmount > 0,
+                    existing.id().toString()
+            );
+        } else {
+            jdbcTemplate.update("DELETE FROM cash_flows WHERE transaction_id = ?", existing.id().toString());
+        }
+
+        return getTransactionsByPortfolio(user, accountId.toString()).stream()
+                .filter(view -> view.id().equals(existing.id().toString()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Transaction saved but could not be reloaded"
+                ));
+    }
+
     public List<StockPositionView> getHoldings(PortfolioMetadataRepository.UserRecord user,
                                                String market,
                                                boolean sortByDayChange) {
@@ -410,11 +622,15 @@ public class StockLedgerService {
         double dayChange = positions.stream().mapToDouble(StockPositionView::dayGain).sum();
         double totalChange = positions.stream().mapToDouble(StockPositionView::totalChange).sum();
         double totalCost = positions.stream().mapToDouble(position -> position.value() - position.totalChange()).sum();
-        List<StocksData.Candlestick> marketCandles = buildMarketCandles(user, market, positions);
+        List<StocksData.Candlestick> intradayHistory = buildMarketCandles(user, market, positions, "60d", "5m");
+        List<StocksData.Candlestick> dailyHistory = buildMarketCandles(user, market, positions, "max", "1d");
+        List<StocksData.Candlestick> marketCandles = !dailyHistory.isEmpty() ? dailyHistory : intradayHistory;
         List<Double> series = marketCandles.stream().map(StocksData.Candlestick::close).toList();
         if (series.isEmpty()) {
             series = syntheticSeries(totalValue);
             marketCandles = syntheticCandles(series);
+            dailyHistory = marketCandles;
+            intradayHistory = List.of();
         }
         return new StockSummary(
                 marketDisplay(marketCode),
@@ -426,7 +642,11 @@ public class StockLedgerService {
                 totalChange,
                 totalCost == 0 ? 0 : (totalChange / totalCost) * 100d,
                 series,
-                marketCandles
+                marketCandles,
+                intradayHistory,
+                dailyHistory,
+                List.of(),
+                List.of()
         );
     }
 
@@ -599,17 +819,27 @@ public class StockLedgerService {
     }
 
     private DerivedLedger deriveLedger(PortfolioMetadataRepository.UserRecord user, String marketCode) {
-        return deriveLedger(user, marketCode, null);
+        return deriveLedger(user, marketCode, null, null);
     }
 
     private DerivedLedger deriveLedger(PortfolioMetadataRepository.UserRecord user,
                                        String marketCode,
                                        LocalDate throughDateInclusive) {
+        return deriveLedger(user, marketCode, throughDateInclusive, null);
+    }
+
+    private DerivedLedger deriveLedger(PortfolioMetadataRepository.UserRecord user,
+                                       String marketCode,
+                                       LocalDate throughDateInclusive,
+                                       UUID excludedTransactionId) {
         List<LedgerEntry> ledger = loadLedger(user, marketCode);
         Map<UUID, InstrumentState> states = new LinkedHashMap<>();
         List<StockTransactionView> views = new ArrayList<>();
 
         for (LedgerEntry entry : ledger) {
+            if (excludedTransactionId != null && excludedTransactionId.equals(entry.id())) {
+                continue;
+            }
             if (throughDateInclusive != null && entry.date().isAfter(throughDateInclusive)) {
                 continue;
             }
@@ -643,6 +873,10 @@ public class StockLedgerService {
                             entry.symbol(),
                             entry.name(),
                             marketDisplay(marketCode),
+                            entry.accountId().toString(),
+                            entry.accountName(),
+                            entry.assetType(),
+                            entry.exDate() == null ? null : entry.exDate().toString(),
                             entry.currency(),
                             quantity,
                             entry.pricePerUnit(),
@@ -682,6 +916,10 @@ public class StockLedgerService {
                             entry.symbol(),
                             entry.name(),
                             marketDisplay(marketCode),
+                            entry.accountId().toString(),
+                            entry.accountName(),
+                            entry.assetType(),
+                            entry.exDate() == null ? null : entry.exDate().toString(),
                             entry.currency(),
                             quantity,
                             entry.pricePerUnit(),
@@ -716,6 +954,10 @@ public class StockLedgerService {
                             entry.symbol(),
                             entry.name(),
                             marketDisplay(marketCode),
+                            entry.accountId().toString(),
+                            entry.accountName(),
+                            entry.assetType(),
+                            entry.exDate() == null ? null : entry.exDate().toString(),
                             entry.currency(),
                             null,
                             null,
@@ -752,11 +994,21 @@ public class StockLedgerService {
     private DerivedLedger deriveLedgerForPortfolio(PortfolioMetadataRepository.UserRecord user,
                                                    UUID accountId,
                                                    LocalDate throughDateInclusive) {
+        return deriveLedgerForPortfolio(user, accountId, throughDateInclusive, null);
+    }
+
+    private DerivedLedger deriveLedgerForPortfolio(PortfolioMetadataRepository.UserRecord user,
+                                                   UUID accountId,
+                                                   LocalDate throughDateInclusive,
+                                                   UUID excludedTransactionId) {
         List<LedgerEntry> ledger = loadLedgerByPortfolio(user, accountId);
         Map<UUID, InstrumentState> states = new LinkedHashMap<>();
         List<StockTransactionView> views = new ArrayList<>();
 
         for (LedgerEntry entry : ledger) {
+            if (excludedTransactionId != null && excludedTransactionId.equals(entry.id())) {
+                continue;
+            }
             if (throughDateInclusive != null && entry.date().isAfter(throughDateInclusive)) {
                 continue;
             }
@@ -785,6 +1037,10 @@ public class StockLedgerService {
                             entry.symbol(),
                             entry.name(),
                             marketDisplay(entry.marketCode()),
+                            entry.accountId().toString(),
+                            entry.accountName(),
+                            entry.assetType(),
+                            entry.exDate() == null ? null : entry.exDate().toString(),
                             entry.currency(),
                             quantity,
                             entry.pricePerUnit(),
@@ -824,6 +1080,10 @@ public class StockLedgerService {
                             entry.symbol(),
                             entry.name(),
                             marketDisplay(entry.marketCode()),
+                            entry.accountId().toString(),
+                            entry.accountName(),
+                            entry.assetType(),
+                            entry.exDate() == null ? null : entry.exDate().toString(),
                             entry.currency(),
                             quantity,
                             entry.pricePerUnit(),
@@ -858,6 +1118,10 @@ public class StockLedgerService {
                             entry.symbol(),
                             entry.name(),
                             marketDisplay(entry.marketCode()),
+                            entry.accountId().toString(),
+                            entry.accountName(),
+                            entry.assetType(),
+                            entry.exDate() == null ? null : entry.exDate().toString(),
                             entry.currency(),
                             null,
                             null,
@@ -893,7 +1157,7 @@ public class StockLedgerService {
 
     private List<LedgerEntry> loadLedger(PortfolioMetadataRepository.UserRecord user, String marketCode) {
         return jdbcTemplate.query("""
-                        SELECT t.id, t.account_id, t.instrument_id, t.trade_date, t.payment_date, t.units, t.price_per_unit,
+                        SELECT t.id, t.account_id, a.account_name, t.instrument_id, t.trade_date, t.payment_date, t.ex_date, t.units, t.price_per_unit,
                                t.gross_amount, t.created_at, tt.code AS transaction_type, i.ticker, i.name,
                                c.code AS currency_code, ac.code AS asset_category_code, sd.fee_net_usd, sd.fee_net_thb,
                                sd.fee_net_local, sd.fee_vat_local, sd.ats_fee_local,
@@ -902,6 +1166,7 @@ public class StockLedgerService {
                                cf.units_entitled, cf.amount_per_unit, cf.gross_amount AS gross_dividend,
                                cf.tax_amount, cf.net_amount
                         FROM transactions t
+                        JOIN accounts a ON a.id = t.account_id
                         JOIN transaction_types tt ON tt.id = t.transaction_type_id
                         JOIN instruments i ON i.id = t.instrument_id
                         JOIN asset_categories ac ON ac.id = i.asset_category_id
@@ -918,8 +1183,10 @@ public class StockLedgerService {
                 (rs, rowNum) -> new LedgerEntry(
                         parseUuid(rs.getString("id")),
                         parseUuid(rs.getString("account_id")),
+                        rs.getString("account_name"),
                         parseUuid(rs.getString("instrument_id")),
                         localDate(rs.getString("trade_date"), rs.getString("payment_date")),
+                        parseLocalDate(rs.getString("ex_date")),
                         rs.getString("transaction_type"),
                         rs.getString("ticker"),
                         rs.getString("name"),
@@ -951,7 +1218,7 @@ public class StockLedgerService {
 
     private List<LedgerEntry> loadLedgerByPortfolio(PortfolioMetadataRepository.UserRecord user, UUID accountId) {
         String sql = """
-                        SELECT t.id, t.account_id, t.instrument_id, t.trade_date, t.payment_date, t.units, t.price_per_unit,
+                        SELECT t.id, t.account_id, a.account_name, t.instrument_id, t.trade_date, t.payment_date, t.ex_date, t.units, t.price_per_unit,
                                t.gross_amount, t.created_at, tt.code AS transaction_type, i.ticker, i.name,
                                c.code AS currency_code, ac.code AS asset_category_code, sd.fee_net_usd, sd.fee_net_thb,
                                sd.fee_net_local, sd.fee_vat_local, sd.ats_fee_local,
@@ -986,8 +1253,10 @@ public class StockLedgerService {
                 (rs, rowNum) -> new LedgerEntry(
                         parseUuid(rs.getString("id")),
                         parseUuid(rs.getString("account_id")),
+                        rs.getString("account_name"),
                         parseUuid(rs.getString("instrument_id")),
                         localDate(rs.getString("trade_date"), rs.getString("payment_date")),
+                        parseLocalDate(rs.getString("ex_date")),
                         rs.getString("transaction_type"),
                         rs.getString("ticker"),
                         rs.getString("name"),
@@ -1054,17 +1323,42 @@ public class StockLedgerService {
                 .sum();
     }
 
+    private double openUnitsOnOrBeforeInPortfolioExcludingTransaction(PortfolioMetadataRepository.UserRecord user,
+                                                                      UUID accountId,
+                                                                      String symbol,
+                                                                      LocalDate date,
+                                                                      UUID excludedTransactionId) {
+        DerivedLedger ledger = deriveLedgerForPortfolio(user, accountId, date, excludedTransactionId);
+        return ledger.instrumentStates.values().stream()
+                .filter(state -> state.symbol().equalsIgnoreCase(symbol))
+                .mapToDouble(InstrumentState::openUnits)
+                .sum();
+    }
+
+    private LedgerEntry requireExistingTransaction(PortfolioMetadataRepository.UserRecord user, String transactionId) {
+        UUID requestedId = parseUuid(transactionId);
+        if (requestedId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Transaction not found");
+        }
+        return loadLedgerByPortfolio(user, null).stream()
+                .filter(entry -> requestedId.equals(entry.id()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transaction not found"));
+    }
+
     private List<StocksData.Candlestick> buildMarketCandles(PortfolioMetadataRepository.UserRecord user,
                                                             String market,
-                                                            List<StockPositionView> positions) {
+                                                            List<StockPositionView> positions,
+                                                            String period,
+                                                            String interval) {
         Map<String, AggregateCandle> aggregate = new LinkedHashMap<>();
         for (StockPositionView position : positions) {
             List<MarketDataProvider.HistoricalBar> bars = marketDataProvider.history(
                     user,
                     position.symbol(),
                     market,
-                    "1mo",
-                    "1d"
+                    period,
+                    interval
             );
             for (MarketDataProvider.HistoricalBar bar : bars) {
                 AggregateCandle candle = aggregate.computeIfAbsent(bar.time(), ignored -> new AggregateCandle());
@@ -1075,6 +1369,7 @@ public class StockLedgerService {
             }
         }
         return aggregate.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey(Comparator.comparing(this::parseInstant)))
                 .map(entry -> new StocksData.Candlestick(
                         entry.getKey(),
                         entry.getValue().open,
@@ -1085,34 +1380,396 @@ public class StockLedgerService {
                 .toList();
     }
 
-    private List<StocksData.Candlestick> buildPortfolioCandles(PortfolioMetadataRepository.UserRecord user,
-                                                               List<StockPositionView> positions) {
-        Map<String, AggregateCandle> aggregate = new LinkedHashMap<>();
-        for (StockPositionView position : positions) {
-            List<MarketDataProvider.HistoricalBar> bars = marketDataProvider.history(
+    private HistoricalSeriesData buildPortfolioSeries(PortfolioMetadataRepository.UserRecord user,
+                                                      UUID accountId,
+                                                      String targetCurrency,
+                                                      String period,
+                                                      String interval) {
+        List<LedgerEntry> ledger = loadLedgerByPortfolio(user, accountId).stream()
+                .filter(entry -> "BUY".equals(entry.transactionType()) || "SELL".equals(entry.transactionType()))
+                .toList();
+        if (ledger.isEmpty()) {
+            return HistoricalSeriesData.empty();
+        }
+
+        Map<UUID, List<LedgerEntry>> entriesByInstrument = new LinkedHashMap<>();
+        Map<UUID, LedgerEntry> instrumentMetadata = new LinkedHashMap<>();
+        for (LedgerEntry entry : ledger) {
+            entriesByInstrument.computeIfAbsent(entry.instrumentId(), ignored -> new ArrayList<>()).add(entry);
+            instrumentMetadata.putIfAbsent(entry.instrumentId(), entry);
+        }
+
+        Map<UUID, List<TimedBar>> barsByInstrument = new LinkedHashMap<>();
+        TreeSet<Instant> timelineInstants = new TreeSet<>();
+        Map<Instant, String> timelineLabels = new LinkedHashMap<>();
+        for (Map.Entry<UUID, List<LedgerEntry>> instrumentEntry : entriesByInstrument.entrySet()) {
+            LedgerEntry metadata = instrumentMetadata.get(instrumentEntry.getKey());
+            List<TimedBar> bars = loadTimedBars(
                     user,
-                    position.symbol(),
-                    position.market(),
-                    "1mo",
-                    "1d"
+                    metadata.symbol(),
+                    marketDisplay(metadata.marketCode()),
+                    period,
+                    interval
             );
-            for (MarketDataProvider.HistoricalBar bar : bars) {
-                AggregateCandle candle = aggregate.computeIfAbsent(bar.time(), ignored -> new AggregateCandle());
-                candle.open += bar.open() * position.quantity();
-                candle.high += bar.high() * position.quantity();
-                candle.low += bar.low() * position.quantity();
-                candle.close += bar.close() * position.quantity();
+            if (bars.isEmpty()) {
+                continue;
+            }
+            barsByInstrument.put(instrumentEntry.getKey(), bars);
+            for (TimedBar bar : bars) {
+                timelineInstants.add(bar.instant());
+                timelineLabels.putIfAbsent(bar.instant(), bar.time());
             }
         }
-        return aggregate.entrySet().stream()
-                .map(entry -> new StocksData.Candlestick(
-                        entry.getKey(),
-                        entry.getValue().open,
-                        entry.getValue().high,
-                        entry.getValue().low,
-                        entry.getValue().close
+
+        if (timelineInstants.isEmpty()) {
+            return HistoricalSeriesData.empty();
+        }
+
+        Map<UUID, Integer> nextLedgerIndex = new HashMap<>();
+        Map<UUID, Deque<HistoricalOpenLot>> openLotsByInstrument = new HashMap<>();
+        Map<UUID, Integer> nextBarIndex = new HashMap<>();
+        Map<UUID, TimedBar> lastBarByInstrument = new HashMap<>();
+        Map<String, List<TimedPricePoint>> fxHistoryCache = new HashMap<>();
+        Map<String, List<TimedPricePoint>> tradeFxHistoryCache = new HashMap<>();
+
+        List<StocksData.Candlestick> valueBars = new ArrayList<>();
+        List<StocksData.Candlestick> performanceBars = new ArrayList<>();
+
+        for (Instant instant : timelineInstants) {
+            AggregatePortfolioCandle aggregate = new AggregatePortfolioCandle();
+            String label = timelineLabels.getOrDefault(instant, instant.toString());
+
+            for (Map.Entry<UUID, List<LedgerEntry>> instrumentEntry : entriesByInstrument.entrySet()) {
+                UUID instrumentId = instrumentEntry.getKey();
+                LedgerEntry metadata = instrumentMetadata.get(instrumentId);
+                List<TimedBar> bars = barsByInstrument.get(instrumentId);
+                if (bars == null || bars.isEmpty()) {
+                    continue;
+                }
+
+                LocalDate effectiveDate = instant.atZone(marketZoneId(metadata.marketCode())).toLocalDate();
+                Deque<HistoricalOpenLot> openLots = openLotsByInstrument.computeIfAbsent(instrumentId, ignored -> new ArrayDeque<>());
+                int appliedEntryIndex = applyLedgerEntriesThroughDate(
+                        user,
+                        instrumentEntry.getValue(),
+                        nextLedgerIndex.getOrDefault(instrumentId, 0),
+                        effectiveDate,
+                        targetCurrency,
+                        tradeFxHistoryCache,
+                        openLots
+                );
+                nextLedgerIndex.put(instrumentId, appliedEntryIndex);
+
+                double openUnits = openLots.stream().mapToDouble(HistoricalOpenLot::remainingUnits).sum();
+                if (openUnits <= EPSILON) {
+                    continue;
+                }
+
+                BarCursor barCursor = advanceBarCursor(
+                        bars,
+                        nextBarIndex.getOrDefault(instrumentId, 0),
+                        lastBarByInstrument.get(instrumentId),
+                        instant
+                );
+                nextBarIndex.put(instrumentId, barCursor.nextIndex());
+                TimedBar currentBar = barCursor.lastSeenBar();
+                lastBarByInstrument.put(instrumentId, currentBar);
+                if (currentBar == null) {
+                    continue;
+                }
+
+                double fxRate = fxRateAtInstant(
+                        user,
+                        metadata.currency(),
+                        targetCurrency,
+                        period,
+                        interval,
+                        instant,
+                        fxHistoryCache
+                );
+                boolean exactTimestampMatch = instant.equals(currentBar.instant());
+                double baseOpen = exactTimestampMatch ? currentBar.open() : currentBar.close();
+                double baseHigh = exactTimestampMatch ? currentBar.high() : currentBar.close();
+                double baseLow = exactTimestampMatch ? currentBar.low() : currentBar.close();
+                double baseClose = currentBar.close();
+
+                double contributionOpen = baseOpen * openUnits * fxRate;
+                double contributionHigh = baseHigh * openUnits * fxRate;
+                double contributionLow = baseLow * openUnits * fxRate;
+                double contributionClose = baseClose * openUnits * fxRate;
+                double costBasis = openLots.stream().mapToDouble(lot -> lot.remainingUnits() * lot.costPerUnitTarget()).sum();
+
+                aggregate.add(
+                        roundMoney(contributionOpen),
+                        roundMoney(contributionHigh),
+                        roundMoney(contributionLow),
+                        roundMoney(contributionClose),
+                        roundMoney(costBasis)
+                );
+            }
+
+            if (!aggregate.hasValue()) {
+                continue;
+            }
+
+            valueBars.add(new StocksData.Candlestick(
+                    label,
+                    roundMoney(aggregate.open()),
+                    roundMoney(aggregate.high()),
+                    roundMoney(aggregate.low()),
+                    roundMoney(aggregate.close())
+            ));
+            performanceBars.add(performanceCandle(
+                    label,
+                    aggregate.open(),
+                    aggregate.high(),
+                    aggregate.low(),
+                    aggregate.close(),
+                    aggregate.costBasis()
+            ));
+        }
+
+        return new HistoricalSeriesData(valueBars, performanceBars);
+    }
+
+    private int applyLedgerEntriesThroughDate(PortfolioMetadataRepository.UserRecord user,
+                                              List<LedgerEntry> entries,
+                                              int startIndex,
+                                              LocalDate effectiveDate,
+                                              String targetCurrency,
+                                              Map<String, List<TimedPricePoint>> tradeFxHistoryCache,
+                                              Deque<HistoricalOpenLot> openLots) {
+        int index = startIndex;
+        while (index < entries.size() && !entries.get(index).date().isAfter(effectiveDate)) {
+            LedgerEntry entry = entries.get(index);
+            switch (entry.transactionType()) {
+                case "BUY" -> {
+                    double quantity = defaultNumber(entry.quantity());
+                    if (quantity > EPSILON) {
+                        double fxAtTrade = fxRateOnDate(
+                                user,
+                                entry.currency(),
+                                targetCurrency,
+                                entry.date(),
+                                tradeFxHistoryCache
+                        );
+                        double costPerUnitTarget = quantity <= EPSILON
+                                ? 0
+                                : roundMoney((grossWithFee(entry) * fxAtTrade) / quantity);
+                        openLots.addLast(new HistoricalOpenLot(quantity, costPerUnitTarget));
+                    }
+                }
+                case "SELL" -> consumeHistoricalLots(openLots, defaultNumber(entry.quantity()));
+                default -> {
+                }
+            }
+            index++;
+        }
+        return index;
+    }
+
+    private void consumeHistoricalLots(Deque<HistoricalOpenLot> openLots, double quantity) {
+        double remaining = quantity;
+        while (remaining > EPSILON && !openLots.isEmpty()) {
+            HistoricalOpenLot lot = openLots.peekFirst();
+            double consumed = Math.min(remaining, lot.remainingUnits());
+            lot.consume(consumed);
+            remaining -= consumed;
+            if (lot.remainingUnits() <= EPSILON) {
+                openLots.removeFirst();
+            }
+        }
+    }
+
+    private BarCursor advanceBarCursor(List<TimedBar> bars,
+                                       int startIndex,
+                                       TimedBar lastSeenBar,
+                                       Instant instant) {
+        int index = startIndex;
+        TimedBar current = lastSeenBar;
+        while (index < bars.size() && !bars.get(index).instant().isAfter(instant)) {
+            current = bars.get(index);
+            index++;
+        }
+        return new BarCursor(index, current);
+    }
+
+    private List<TimedBar> loadTimedBars(PortfolioMetadataRepository.UserRecord user,
+                                         String symbol,
+                                         String market,
+                                         String period,
+                                         String interval) {
+        return marketDataProvider.history(user, symbol, market, period, interval).stream()
+                .map(bar -> new TimedBar(
+                        bar.time(),
+                        parseInstant(bar.time()),
+                        bar.open(),
+                        bar.high(),
+                        bar.low(),
+                        bar.close()
+                ))
+                .sorted(Comparator.comparing(TimedBar::instant))
+                .toList();
+    }
+
+    private double fxRateAtInstant(PortfolioMetadataRepository.UserRecord user,
+                                   String fromCurrency,
+                                   String toCurrency,
+                                   String period,
+                                   String interval,
+                                   Instant instant,
+                                   Map<String, List<TimedPricePoint>> cache) {
+        String normalizedFrom = normalizeCurrencyCode(fromCurrency);
+        String normalizedTo = normalizeCurrencyCode(toCurrency);
+        if (normalizedFrom == null || normalizedTo == null || normalizedFrom.equalsIgnoreCase(normalizedTo)) {
+            return 1d;
+        }
+        List<TimedPricePoint> series = fxHistory(user, normalizedFrom, normalizedTo, period, interval, cache);
+        if (series.isEmpty()) {
+            return marketDataProvider.fxRate(normalizedFrom, normalizedTo).orElse(1d);
+        }
+        TimedPricePoint lastSeen = null;
+        for (TimedPricePoint point : series) {
+            if (point.instant().isAfter(instant)) {
+                break;
+            }
+            lastSeen = point;
+        }
+        if (lastSeen != null) {
+            return lastSeen.close();
+        }
+        return series.get(0).close();
+    }
+
+    private double fxRateOnDate(PortfolioMetadataRepository.UserRecord user,
+                                String fromCurrency,
+                                String toCurrency,
+                                LocalDate date,
+                                Map<String, List<TimedPricePoint>> cache) {
+        String normalizedFrom = normalizeCurrencyCode(fromCurrency);
+        String normalizedTo = normalizeCurrencyCode(toCurrency);
+        if (normalizedFrom == null || normalizedTo == null || normalizedFrom.equalsIgnoreCase(normalizedTo)) {
+            return 1d;
+        }
+        Instant lookupInstant = date.plusDays(1).atStartOfDay(ZoneId.of("UTC")).minusSeconds(1).toInstant();
+        List<TimedPricePoint> series = fxHistory(user, normalizedFrom, normalizedTo, "max", "1d", cache);
+        if (series.isEmpty()) {
+            return marketDataProvider.fxRate(normalizedFrom, normalizedTo).orElse(1d);
+        }
+        TimedPricePoint lastSeen = null;
+        for (TimedPricePoint point : series) {
+            if (point.instant().isAfter(lookupInstant)) {
+                break;
+            }
+            lastSeen = point;
+        }
+        if (lastSeen != null) {
+            return lastSeen.close();
+        }
+        return series.get(0).close();
+    }
+
+    private List<TimedPricePoint> fxHistory(PortfolioMetadataRepository.UserRecord user,
+                                            String fromCurrency,
+                                            String toCurrency,
+                                            String period,
+                                            String interval,
+                                            Map<String, List<TimedPricePoint>> cache) {
+        if (fromCurrency.equalsIgnoreCase(toCurrency)) {
+            return List.of(new TimedPricePoint(Instant.EPOCH, 1d));
+        }
+
+        String cacheKey = fromCurrency + "->" + toCurrency + "|" + period + "|" + interval;
+        if (cache.containsKey(cacheKey)) {
+            return cache.get(cacheKey);
+        }
+
+        List<TimedPricePoint> direct = marketDataProvider.history(
+                        user,
+                        fromCurrency + toCurrency + "=X",
+                        "US",
+                        period,
+                        interval
+                ).stream()
+                .map(bar -> new TimedPricePoint(parseInstant(bar.time()), bar.close()))
+                .sorted(Comparator.comparing(TimedPricePoint::instant))
+                .toList();
+        if (!direct.isEmpty()) {
+            cache.put(cacheKey, direct);
+            return direct;
+        }
+
+        List<TimedPricePoint> inverse = marketDataProvider.history(
+                        user,
+                        toCurrency + fromCurrency + "=X",
+                        "US",
+                        period,
+                        interval
+                ).stream()
+                .map(bar -> new TimedPricePoint(
+                        parseInstant(bar.time()),
+                        bar.close() <= EPSILON ? 0d : 1d / bar.close()
+                ))
+                .sorted(Comparator.comparing(TimedPricePoint::instant))
+                .toList();
+        cache.put(cacheKey, inverse);
+        return inverse;
+    }
+
+    private StocksData.Candlestick performanceCandle(String time,
+                                                     double open,
+                                                     double high,
+                                                     double low,
+                                                     double close,
+                                                     double costBasis) {
+        if (costBasis <= EPSILON) {
+            return new StocksData.Candlestick(time, 0, 0, 0, 0);
+        }
+        return new StocksData.Candlestick(
+                time,
+                roundMoney(((open - costBasis) / costBasis) * 100d),
+                roundMoney(((high - costBasis) / costBasis) * 100d),
+                roundMoney(((low - costBasis) / costBasis) * 100d),
+                roundMoney(((close - costBasis) / costBasis) * 100d)
+        );
+    }
+
+    private List<StocksData.Candlestick> syntheticPerformanceCandles(List<StocksData.Candlestick> valueCandles,
+                                                                     double costBasis) {
+        return valueCandles.stream()
+                .map(candle -> performanceCandle(
+                        candle.time(),
+                        candle.open(),
+                        candle.high(),
+                        candle.low(),
+                        candle.close(),
+                        costBasis
                 ))
                 .toList();
+    }
+
+    private double latestDayChange(List<StocksData.Candlestick> dailyHistory, double fallbackTotalValue) {
+        if (dailyHistory.size() >= 2) {
+            double latest = dailyHistory.get(dailyHistory.size() - 1).close();
+            double previous = dailyHistory.get(dailyHistory.size() - 2).close();
+            return roundMoney(latest - previous);
+        }
+        if (dailyHistory.size() == 1) {
+            return roundMoney(dailyHistory.get(0).close() - fallbackTotalValue);
+        }
+        return 0d;
+    }
+
+    private double conversionRate(PortfolioMetadataRepository.UserRecord user,
+                                  String fromCurrency,
+                                  String toCurrency) {
+        if (fromCurrency == null || fromCurrency.isBlank() || toCurrency == null || toCurrency.isBlank()) {
+            return 1d;
+        }
+        if (fromCurrency.equalsIgnoreCase(toCurrency) || "MIXED".equalsIgnoreCase(toCurrency)) {
+            return 1d;
+        }
+        return marketDataProvider.fxRate(fromCurrency, toCurrency).orElse(1d);
     }
 
     private UUID ensureStockAccount(PortfolioMetadataRepository.UserRecord user,
@@ -1205,9 +1862,14 @@ public class StockLedgerService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Portfolio not found"));
     }
 
-    private String summaryCurrency(PortfolioAccount selectedAccount, List<StockPositionView> positions) {
+    private String summaryCurrency(PortfolioAccount selectedAccount,
+                                   List<StockPositionView> positions,
+                                   String preferredCurrency) {
         if (selectedAccount != null && selectedAccount.currency() != null && !selectedAccount.currency().isBlank()) {
             return selectedAccount.currency();
+        }
+        if (preferredCurrency != null && !preferredCurrency.isBlank()) {
+            return preferredCurrency;
         }
         String distinctCurrency = positions.stream()
                 .map(StockPositionView::currency)
@@ -1216,6 +1878,13 @@ public class StockLedgerService {
                 .reduce((left, right) -> "__MIXED__")
                 .orElse("USD");
         return "__MIXED__".equals(distinctCurrency) ? "MIXED" : distinctCurrency;
+    }
+
+    private String normalizeCurrencyCode(String currency) {
+        if (currency == null || currency.isBlank()) {
+            return null;
+        }
+        return currency.trim().toUpperCase(Locale.ROOT);
     }
 
     private UUID ensureInstrument(PortfolioMetadataRepository.UserRecord user,
@@ -1474,15 +2143,35 @@ public class StockLedgerService {
         if (normalized.chars().allMatch(Character::isDigit)) {
             return instantFromEpoch(normalized);
         }
+        if (normalized.length() == 10 && normalized.charAt(4) == '-' && normalized.charAt(7) == '-') {
+            try {
+                return LocalDate.parse(normalized).atStartOfDay(ZoneId.of("UTC")).toInstant();
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            return OffsetDateTime.parse(normalized).toInstant();
+        } catch (Exception ignored) {
+        }
         try {
             return Instant.parse(normalized);
         } catch (Exception ignored) {
         }
         try {
-            return LocalDateTime.parse(normalized.replace(' ', 'T')).atZone(ZoneId.systemDefault()).toInstant();
+            return LocalDateTime.parse(normalized.replace(' ', 'T')).atZone(ZoneId.of("UTC")).toInstant();
         } catch (Exception ignored) {
         }
         return Instant.EPOCH;
+    }
+
+    private ZoneId marketZoneId(String marketCode) {
+        return switch (normalizeMarketCode(marketCode)) {
+            case "TH" -> ZoneId.of("Asia/Bangkok");
+            case "UK" -> ZoneId.of("Europe/London");
+            case "TW" -> ZoneId.of("Asia/Taipei");
+            case "US" -> ZoneId.of("America/New_York");
+            default -> ZoneId.of("UTC");
+        };
     }
 
     private Instant instantFromEpoch(String raw) {
@@ -1516,8 +2205,10 @@ public class StockLedgerService {
     private record LedgerEntry(
             UUID id,
             UUID accountId,
+            String accountName,
             UUID instrumentId,
             LocalDate date,
+            LocalDate exDate,
             String transactionType,
             String symbol,
             String name,
@@ -1620,6 +2311,37 @@ public class StockLedgerService {
     ) {
     }
 
+    private record HistoricalSeriesData(
+            List<StocksData.Candlestick> valueBars,
+            List<StocksData.Candlestick> performanceBars
+    ) {
+        private static HistoricalSeriesData empty() {
+            return new HistoricalSeriesData(List.of(), List.of());
+        }
+    }
+
+    private record TimedBar(
+            String time,
+            Instant instant,
+            double open,
+            double high,
+            double low,
+            double close
+    ) {
+    }
+
+    private record TimedPricePoint(
+            Instant instant,
+            double close
+    ) {
+    }
+
+    private record BarCursor(
+            int nextIndex,
+            TimedBar lastSeenBar
+    ) {
+    }
+
     private static final class OpenLot {
         private final UUID id;
         private final LocalDate date;
@@ -1657,10 +2379,74 @@ public class StockLedgerService {
     private record SellResult(double realizedPnl, double costBasis) {
     }
 
+    private static final class HistoricalOpenLot {
+        private double remainingUnits;
+        private final double costPerUnitTarget;
+
+        private HistoricalOpenLot(double remainingUnits, double costPerUnitTarget) {
+            this.remainingUnits = remainingUnits;
+            this.costPerUnitTarget = costPerUnitTarget;
+        }
+
+        private double remainingUnits() {
+            return remainingUnits;
+        }
+
+        private double costPerUnitTarget() {
+            return costPerUnitTarget;
+        }
+
+        private void consume(double units) {
+            remainingUnits = Math.max(0, remainingUnits - units);
+        }
+    }
+
     private static final class AggregateCandle {
         private double open;
         private double high;
         private double low;
         private double close;
+    }
+
+    private static final class AggregatePortfolioCandle {
+        private double open;
+        private double high;
+        private double low;
+        private double close;
+        private double costBasis;
+        private boolean hasValue;
+
+        private void add(double open, double high, double low, double close, double costBasis) {
+            this.open += open;
+            this.high += high;
+            this.low += low;
+            this.close += close;
+            this.costBasis += costBasis;
+            this.hasValue = true;
+        }
+
+        private double open() {
+            return open;
+        }
+
+        private double high() {
+            return high;
+        }
+
+        private double low() {
+            return low;
+        }
+
+        private double close() {
+            return close;
+        }
+
+        private double costBasis() {
+            return costBasis;
+        }
+
+        private boolean hasValue() {
+            return hasValue;
+        }
     }
 }

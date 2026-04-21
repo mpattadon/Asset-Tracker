@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import threading
 import time
 from datetime import date, datetime
@@ -19,8 +20,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 SEARCH_CACHE_TTL_SECONDS = 300
 INSPECT_CACHE_TTL_SECONDS = 300
-SEARCH_CACHE_VERSION = "v3"
-SIDECAR_VERSION = "2026-04-20-search-v3"
+SEARCH_CACHE_VERSION = "v4"
+SIDECAR_VERSION = "2026-04-21-search-v4"
 
 _search_cache: dict[tuple[str, str | None, tuple[str, ...]], tuple[float, list[dict[str, Any]]]] = {}
 _inspect_cache: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = {}
@@ -123,18 +124,22 @@ def safe_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
         return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return numeric
 
 
 def safe_int(value: Any) -> int | None:
     if value is None:
         return None
     try:
-        return int(value)
+        numeric = int(value)
     except (TypeError, ValueError):
         return None
+    return numeric
 
 
 def first_non_empty(*values: Any) -> str | None:
@@ -335,7 +340,7 @@ def history_payload(
     return records
 
 
-def quote_payload(symbol: str, market: str) -> dict[str, Any] | None:
+def quote_payload_fast(symbol: str, market: str) -> dict[str, Any] | None:
     ticker_symbol = normalize_symbol(symbol, market)
     ticker = yf.Ticker(ticker_symbol)
     fast_info = mapping_payload(getattr(ticker, "fast_info", None))
@@ -354,22 +359,35 @@ def quote_payload(symbol: str, market: str) -> dict[str, Any] | None:
             else float(history["Close"].iloc[-2] or close) if len(history.index) > 1 else close
         )
 
-    info = {}
+    day_change_pct = 0.0 if prev_close == 0 else ((close - prev_close) / prev_close) * 100
+    return {
+        "symbol": denormalize_symbol(ticker_symbol, market),
+        "name": denormalize_symbol(ticker_symbol, market),
+        "market": market,
+        "type": "Stock",
+        "currency": fast_info.get("currency") or ("THB" if market == "TH" else "USD"),
+        "price": close,
+        "dayChangePct": day_change_pct,
+    }
+
+
+def quote_payload(symbol: str, market: str) -> dict[str, Any] | None:
+    base_payload = quote_payload_fast(symbol, market)
+    if base_payload is None:
+        return None
+
+    ticker_symbol = normalize_symbol(symbol, market)
+    ticker = yf.Ticker(ticker_symbol)
     try:
         info = ticker.get_info() or {}
     except Exception:
         info = {}
 
-    day_change_pct = 0.0 if prev_close == 0 else ((close - prev_close) / prev_close) * 100
-    return {
-        "symbol": denormalize_symbol(ticker_symbol, market),
-        "name": info.get("longName") or info.get("shortName") or denormalize_symbol(ticker_symbol, market),
-        "market": market,
-        "type": info.get("quoteType") or info.get("instrumentType") or "Stock",
-        "currency": info.get("currency") or "USD",
-        "price": close,
-        "dayChangePct": day_change_pct,
-    }
+    if info:
+        base_payload["name"] = info.get("longName") or info.get("shortName") or base_payload["name"]
+        base_payload["type"] = info.get("quoteType") or info.get("instrumentType") or base_payload["type"]
+        base_payload["currency"] = info.get("currency") or base_payload["currency"]
+    return base_payload
 
 
 def fx_rate_payload(base_currency: str, quote_currency: str) -> dict[str, Any] | None:
@@ -448,7 +466,7 @@ def inspect_payload(symbol: str, market: str, period: str, interval: str) -> dic
         return cached
     ticker_symbol = normalize_symbol(symbol, market)
     ticker = yf.Ticker(ticker_symbol)
-    quote = quote_payload(symbol, market)
+    quote = quote_payload_fast(symbol, market)
     if quote is None:
         return None
     try:
@@ -475,9 +493,9 @@ def inspect_payload(symbol: str, market: str, period: str, interval: str) -> dic
         "normalizedSymbol": ticker_symbol,
         "symbol": quote["symbol"],
         "market": market,
-        "name": quote["name"],
-        "type": quote["type"],
-        "currency": quote["currency"],
+        "name": info.get("longName") or info.get("shortName") or quote["name"],
+        "type": info.get("quoteType") or info.get("instrumentType") or quote["type"],
+        "currency": info.get("currency") or quote["currency"],
         "price": quote["price"],
         "dayChangePct": quote["dayChangePct"],
         "exchange": info.get("fullExchangeName") or info.get("exchange"),
@@ -499,8 +517,15 @@ def inspect_payload(symbol: str, market: str, period: str, interval: str) -> dic
         "country": country,
         "ceo": ceo_name(info),
         "fullTimeEmployees": safe_float(info.get("fullTimeEmployees")),
+        "beta": safe_float(info.get("beta")),
         "trailingPe": safe_float(info.get("trailingPE") or info.get("trailingPe")),
+        "forwardPe": safe_float(info.get("forwardPE") or info.get("forwardPe")),
+        "trailingEps": safe_float(info.get("trailingEps")),
+        "forwardEps": safe_float(info.get("forwardEps")),
         "dividendYield": safe_float(info.get("dividendYield")),
+        "fiftyDayAverage": safe_float(info.get("fiftyDayAverage")),
+        "twoHundredDayAverage": safe_float(info.get("twoHundredDayAverage")),
+        "sharesOutstanding": safe_float(info.get("sharesOutstanding")),
         "news": news_payload(ticker),
         "incomeStatement": financial_statement_payload("Income Statement", income_stmt),
         "balanceSheet": financial_statement_payload("Balance Sheet", balance_sheet),
@@ -577,14 +602,22 @@ def search_payload(query: str, market: str | None, types: list[str]) -> list[dic
         if len(results) >= 8:
             break
 
+    query_canonical = canonical_symbol(query)
+    has_exact_result = any(
+        canonical_symbol(str(result.get("symbol") or "")) == query_canonical
+        and (not requested_market or str(result.get("market") or "").upper() == requested_market)
+        for result in results
+    )
+
     exact_matches: list[dict[str, Any]] = []
-    for symbol_candidate, market_candidate in exact_search_candidates(query, requested_market):
-        fallback = quote_payload(symbol_candidate, market_candidate)
-        if not fallback:
-            continue
-        if normalized_types and str(fallback.get("type") or "").upper() not in normalized_types:
-            continue
-        exact_matches.append(fallback)
+    if not has_exact_result:
+        for symbol_candidate, market_candidate in exact_search_candidates(query, requested_market):
+            fallback = quote_payload_fast(symbol_candidate, market_candidate)
+            if not fallback:
+                continue
+            if normalized_types and str(fallback.get("type") or "").upper() not in normalized_types:
+                continue
+            exact_matches.append(fallback)
 
     exact_matches.sort(
         key=lambda payload: (
@@ -678,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
         logging.info("%s - %s", self.address_string(), format % args)
 
     def respond(self, status: HTTPStatus, payload: Any) -> None:
-        body = json.dumps(payload, default=json_default).encode("utf-8")
+        body = json.dumps(payload, default=json_default, allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
